@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hod"
+version = "0.1.0"
+description = "Detect when an agent-harness improvement is real and when it is just fitted to the eval suite"
+readme = "README.md"
+authors = [{name = "Neguiolidas"}]
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+keywords = ["harness", "overfitting", "evaluation", "held-out", "agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/Neguiolidas/hod"
+Repository = "https://github.com/Neguiolidas/hod"
+Issues = "https://github.com/Neguiolidas/hod/issues"
+
+[project.scripts]
+hod = "hod.cli:main"
+
+[tool.setuptools]
+packages = ["hod"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

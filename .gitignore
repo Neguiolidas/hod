@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+dist/
+build/
+*.egg-info/
+
+# Internal planning docs: never committed (rule 2026-10-22)
+PLANO.md
+PRD.md
+FASE-4-DESENHO.md
+ROBUSTEZ.md
+FONTES.md
+MUDANCAS_PT.md
+runs/
