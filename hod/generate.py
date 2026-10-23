@@ -42,7 +42,7 @@ NOVELTY_THRESHOLD = 0.60
 CONTENT_SHINGLE = 3
 MAX_ATTEMPTS = 50
 SHINGLE = 5
-DEFAULT_CATALOG = Path.home() / "workspace" / "harness-eval" / "catalog"
+DEFAULT_CATALOG = Path.home() / "hod" / "catalog"
 
 
 _WORD = re.compile(r"[^\W_]+")

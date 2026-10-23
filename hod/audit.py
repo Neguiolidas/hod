@@ -6,14 +6,13 @@ Checks:
 2. No held-out task is a near-duplicate of another (pairwise, 5-grams).
 3. No held-out task exceeds the similarity ceiling against the suite.
 
-Usage: hod audit --heldout runs/heldout-42 [--catalog ~/workspace/harness-eval/catalog]
+Usage: hod audit --heldout runs/heldout-42 [--catalog ~/hod/catalog]
     (from the clone, without installing: python3 -m hod audit ...)
 """
 
 import argparse
 import hashlib
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -40,7 +39,7 @@ def main(argv=None, prog=None):
     parser.add_argument(
         "--catalog",
         type=Path,
-        default=Path.home() / "workspace" / "harness-eval" / "catalog",
+        default=Path.home() / "hod" / "catalog",
     )
     args = parser.parse_args(argv)
     failures = []

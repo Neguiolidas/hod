@@ -6,6 +6,12 @@ Every harness improvement is usually measured on the same fixed set of tasks. A 
 
 ## Installation
 
+From PyPI (Python 3.10 or newer):
+
+```bash
+pip install hod
+```
+
 From the repo checkout (no install needed, run from the repo root):
 
 ```bash
@@ -20,7 +26,7 @@ pip install -e .
 
 ## Usage
 
-The `hod` command has three measurement sections, a robustness layer and an automation layer (including the `improve` self-improvement loop). From a clone without installing, replace `hod` with `python3 -m hod` in every command below.
+The `hod` command has three measurement sections, a robustness layer and an automation layer (including the `improve` self-improvement loop). From a clone without installing, replace `hod` with `python3 -m hod` in every command below. Paths under `runs/` in the examples are outputs the commands create on your machine; `runs/` is not part of the checkout.
 
 ### generate: held-out tasks
 
@@ -199,7 +205,7 @@ Held-out tasks must never enter the fixed suite: once they do, they stop being h
 
 ## Canary integration
 
-The harness canary generates a held-out set on every run and reports the held-out table, gap and verdict next to the suite table. The verdict is advisory by default; `HELDOUT_GATE=blocking` makes `OVERFIT` (aggregate) block. Old runs without held-out data still report normally, and a failed generation or verdict computation degrades softly instead of breaking the suite gate. The canary uses the repo checkout directly (`PYTHONPATH=<repo> python3 -m hod generate`), so it works without a pip install. With `HOD_SEEDS="42,43,44"` it generates one set per seed and reports the aggregate verdict and stability; with `HOD_BLIND=1` it writes blind templates and keeps keys outside the run dirs; with a prereg file argument it freezes the hypothesis copy in the run dirs. The report appends to `runs/ledger.jsonl` by itself unless `HOD_NO_LEDGER=1`.
+HOD does not ship a canary runner: the canary is the harness that embeds HOD, not this package. On every harness run, the harness wrapper calls `hod generate` to build a fresh held-out set and `hod gap` / `hod audit` to report the held-out table, gap and verdict next to the suite table. The verdict is advisory by default; `HELDOUT_GATE=blocking` makes `OVERFIT` (aggregate) block. Old runs without held-out data still report normally, and a failed generation or verdict computation degrades softly instead of breaking the suite gate. A harness canary typically wires HOD like this: it uses the repo checkout directly (`PYTHONPATH=<repo> python3 -m hod generate`), so it works without a pip install. With `HOD_SEEDS="42,43,44"` it generates one set per seed and reports the aggregate verdict and stability; with `HOD_BLIND=1` it writes blind templates and keeps keys outside the run dirs; with a prereg file argument it freezes the hypothesis copy in the run dirs. The report appends to `runs/ledger.jsonl` by itself unless `HOD_NO_LEDGER=1`. The `HELDOUT_GATE`, `HOD_SEEDS`, `HOD_BLIND` and `HOD_NO_LEDGER` variables are read by the harness-side wrapper, not by HOD itself (the package contains no reference to them); HOD only exposes the CLI commands the wrapper calls.
 
 ## Layout
 
@@ -209,7 +215,8 @@ hod/         the package: cli, generate, gap, stats, audit, families,
              pipeline, improve, toy, demo
 tests/       synthetic positive controls + CLI smoke test + robustness +
              pipeline e2e + audit regressions + stats, generator, improve
-runs/        example held-out set, first real baseline and control fixture
+runs/        NOT shipped: created locally by the commands above
+             (held-out sets, ledger, reports); gitignored
 ```
 
 ## License

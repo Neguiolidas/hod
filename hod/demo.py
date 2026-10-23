@@ -96,7 +96,7 @@ def main(argv=None, prog=None):
     if args.out.exists() and any(args.out.iterdir()):
         print("demo: %s already exists and is not empty" % args.out, file=sys.stderr)
         return 1
-    result = run_one(args.out / "principal", seed=args.seed,
+    run_one(args.out / "principal", seed=args.seed,
                      rounds=args.rounds, n_held=args.n_held,
                      via_commands=args.via_commands)
     report = (args.out / "principal" / "improve" / "report.md").read_text()

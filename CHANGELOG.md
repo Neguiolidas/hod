@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.1 — 2026-10-23
+
+- README: installation now leads with `pip install hod` (the package is on PyPI); the Layout section no longer lists `runs/` as shipped content (`runs/` is local output, gitignored); the Canary section states the canary runner is external to this package and documents the harness-side variables it uses.
+- CI: new `test.yml` workflow (pytest on Python 3.10/3.11/3.12 plus pyflakes lint); the release workflow now runs the test job first and publishes only if it passes.
+- Catalog default generalized: `--catalog` now defaults to `~/hod/catalog` instead of a path inside the author's workspace; the previous default only existed on the author's machine.
+- Lint fixes: removed an unused `re` import (`audit.py`) and an unused variable assignment (`demo.py`).
+
 ## v0.1.0 — 2026-10-22
 
 Audit corrections and improvements incorporated before launch, in the

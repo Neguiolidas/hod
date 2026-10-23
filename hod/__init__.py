@@ -7,4 +7,4 @@ try:
 
     __version__ = _pkg_version("hod")
 except Exception:
-    __version__ = "0.1.0"
+    __version__ = "0.1.1"
