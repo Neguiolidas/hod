@@ -14,15 +14,16 @@ Usage:
 """
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 try:
     from .scores import flatten as _flatten
+    from .scores import read_json
 except ImportError:  # direct execution of the file, outside the package
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from scores import flatten as _flatten  # noqa: E402
+    from scores import read_json  # noqa: E402
 
 
 def flatten(scores):
@@ -76,10 +77,10 @@ def main(argv=None, prog=None):
     args = parser.parse_args(argv)
     try:
         result = agree(
-            json.loads(args.a.read_text()),
-            json.loads(args.b.read_text()),
+            read_json(args.a, "scores file A"),
+            read_json(args.b, "scores file B"),
         )
-    except ValueError as e:
+    except (ValueError, OSError) as e:
         print("agree: %s" % e, file=sys.stderr)
         return 1
     print(

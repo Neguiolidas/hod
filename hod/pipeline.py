@@ -36,7 +36,10 @@ from pathlib import Path
 
 from hod import gap as gap_mod
 from hod import ledger as ledger_mod
+from hod import manifest as manifest_mod
 from hod import prereg as prereg_mod
+from hod import stats as stats_mod
+from hod.scores import read_json
 
 
 def _seed_sort_key(path):
@@ -86,16 +89,20 @@ def build_categories(sets, suite_categories):
     if suite_categories:
         mapping.update(suite_categories)
     for _, set_dir in sets:
-        manifest = json.loads((set_dir / "manifest.json").read_text())
+        manifest = manifest_mod.load(set_dir)
         for task in manifest["tasks"]:
-            text = (set_dir / task["file"]).read_text()
+            path = set_dir / task["file"]
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, ValueError) as e:
+                raise ValueError("cannot read task file %s: %s" % (path, e))
             mapping[task["id"]] = task_category(text, task["family"])
     return mapping
 
 
 def same_baseline_problem(manifest, held_base):
-    """Message of error if the held-base reusa the scores of the filter of
-    calibration (selection by the same noise that enters in the delta), otherwise None."""
+    """Error message if held-base reuses the scores of the calibration filter
+    (selection by the same noise that enters the delta), otherwise None."""
     cal = manifest.get("calibration") or {}
     used = cal.get("baseline_scores")
     if not used:
@@ -126,8 +133,8 @@ def check_ids(manifest, scores, label):
 
 
 def stratified_wave(ids, family_of, k):
-    """Wave-1 subset with one task per family in rotation (before
-    it was the first k in alphabetical order: only the first families)."""
+    """Wave-1 subset with one task per family in rotation (before, it was
+    the first k in alphabetical order: only the first families)."""
     by_fam = {}
     for t in sorted(ids):
         by_fam.setdefault(family_of.get(t, "?"), []).append(t)
@@ -141,9 +148,9 @@ def stratified_wave(ids, family_of, k):
 
 def by_family(result_seed, suite_base, suite_cand, held_base, held_cand,
               family_of, categories):
-    """Verdict per family of the generator (is the key that the weights use).
-    Suite of the family = tasks of the suite in the same category; if not houver,
-    the suite integer."""
+    """Verdict per generator family (the key the ledger weights use).
+    Suite of the family = suite tasks in the same category; if there are
+    none, the whole suite."""
     out = {}
     fams = sorted({family_of[t] for t in held_base if t in family_of})
     for fam in fams:
@@ -155,8 +162,8 @@ def by_family(result_seed, suite_base, suite_cand, held_base, held_cand,
         if not sb or not sc:
             sb, sc = suite_base, suite_cand
         try:
-            # per family the n is small too much for CI: the rule point only
-            # alimenta the weights of the ledger (where olhar), not decides nothing
+            # per family the n is too small for a CI: the point rule only
+            # feeds the ledger weights (where to look), it decides nothing
             r = gap_mod.analyze(sb, sc, hb, hc, decision="point", n_boot=200)
         except ValueError:
             continue
@@ -283,30 +290,54 @@ def main(argv=None, prog=None):
     parser.add_argument(
         "--decision", choices=gap_mod.DECISIONS, default="ci",
         help="ci (v0.2 default): verdict by CI and noise floor; point: "
-        "point rule da v0.1",
+        "v0.1 point rule",
     )
     args = parser.parse_args(argv)
-
+    if args.wave1 is not None and args.wave1 < 1:
+        parser.error("--wave1 must be >= 1")
     try:
-        sets = discover_sets(args.heldout_dir, args.seeds)
-    except ValueError as e:
+        return _run(args)
+    except (ValueError, OSError) as e:
         print("pipeline: %s" % e, file=sys.stderr)
         return 1
+
+
+def _run(args):
+    sets = discover_sets(args.heldout_dir, args.seeds)
     seed_names = [name for name, _ in sets]
+    manifests_by_seed = {name: manifest_mod.load(set_dir)
+                         for name, set_dir in sets}
 
     prereg_data = None
     if args.prereg:
         prereg_data = prereg_mod.load(args.prereg)
         manifests = [set_dir / "manifest.json" for _, set_dir in sets]
-        bound = all(
-            json.loads(m.read_text()).get("prereg_sha256") for m in manifests
-        )
-        if bound:
+        bound_flags = [bool(manifests_by_seed[name].get("prereg_sha256"))
+                       for name, _ in sets]
+        if any(bound_flags) and not all(bound_flags):
+            unbound = [name for (name, _), b in zip(sets, bound_flags) if not b]
+            print("pipeline: mixed sets: %s generated without --prereg while "
+                  "the others are bound; the weak mtime check would cover all "
+                  "of them" % ", ".join(unbound), file=sys.stderr)
+            return 1
+        if all(bound_flags):
             ok, why = prereg_mod.verify(args.prereg, manifests)
+            if ok:
+                for name, _ in sets:
+                    salt = manifests_by_seed[name].get("seed_salt")
+                    if name != "single" and str(salt) != name:
+                        ok, why = False, ("set seed-%s was generated with salt "
+                                          "%s (renamed directory?)" % (name, salt))
+                        break
             if not ok:
                 print("pipeline: prereg does not match the set: %s" % why,
                       file=sys.stderr)
                 return 1
+            if prereg_data.get("seeds") is None:
+                print("warning: the prereg declares no seeds (hod prereg "
+                      "--seeds): binding proves the sets come from this "
+                      "prereg, not that they are the only ones generated",
+                      file=sys.stderr)
         else:
             print(
                 "warning: set generated without --prereg; peeking check "
@@ -321,24 +352,18 @@ def main(argv=None, prog=None):
                 )
                 return 1
 
-    try:
-        suite_base = gap_mod.load(args.scores_dir / "suite-base.json")
-        suite_cand = gap_mod.load(args.scores_dir / "suite-cand.json")
-    except ValueError as e:
-        print("pipeline: %s" % e, file=sys.stderr)
-        return 1
+    suite_base = gap_mod.load(args.scores_dir / "suite-base.json")
+    suite_cand = gap_mod.load(args.scores_dir / "suite-cand.json")
     suite_categories = None
     if args.suite_categories:
-        suite_categories = json.loads(args.suite_categories.read_text())
+        suite_categories = read_json(args.suite_categories,
+                                     "suite categories file", expect=dict)
     categories = build_categories(sets, suite_categories)
     calibration = None
     if args.calibration:
-        calibration = json.loads(args.calibration.read_text())
+        calibration = read_json(args.calibration, "calibration file",
+                                expect=dict)
 
-    manifests_by_seed = {
-        name: json.loads((set_dir / "manifest.json").read_text())
-        for name, set_dir in sets
-    }
     family_of = {}
     for m in manifests_by_seed.values():
         for t in m["tasks"]:
@@ -352,16 +377,15 @@ def main(argv=None, prog=None):
                   "held-%s (seed %s)" % (kind, seed_name))
         return scores
 
-    try:
-        for seed_name, _ in sets:
-            hb = held_scores(seed_name, "base")
-            held_scores(seed_name, "cand")
-            problem = same_baseline_problem(manifests_by_seed[seed_name], hb)
-            if problem and not args.allow_same_baseline:
-                raise ValueError("seed %s: %s" % (seed_name, problem))
-    except ValueError as e:
-        print("pipeline: %s" % e, file=sys.stderr)
-        return 1
+    def manifest_ids(seed_name):
+        return [t["id"] for t in manifests_by_seed[seed_name]["tasks"]]
+
+    for seed_name, _ in sets:
+        hb = held_scores(seed_name, "base")
+        held_scores(seed_name, "cand")
+        problem = same_baseline_problem(manifests_by_seed[seed_name], hb)
+        if problem and not args.allow_same_baseline:
+            raise ValueError("seed %s: %s" % (seed_name, problem))
 
     data = {
         "change": args.change,
@@ -379,12 +403,17 @@ def main(argv=None, prog=None):
         hb = held_scores(first_name, "base")
         hc = held_scores(first_name, "cand")
         wave_ids = stratified_wave(set(hb) & set(hc), family_of, args.wave1)
+        if args.decision == "ci" and len(wave_ids) < stats_mod.MIN_N_CI:
+            print("warning: wave 1 has %d tasks (< %d): the CI decision cannot "
+                  "assert OVERFIT on it, so it will never stop the run"
+                  % (len(wave_ids), stats_mod.MIN_N_CI), file=sys.stderr)
         wave_result = gap_mod.analyze(
             suite_base,
             suite_cand,
             {t: hb[t] for t in wave_ids},
             {t: hc[t] for t in wave_ids},
             decision=args.decision,
+            held_ids=wave_ids,
         )
         if wave_result["verdict"] == "OVERFIT":
             data["wave_stopped"] = True
@@ -397,9 +426,9 @@ def main(argv=None, prog=None):
             data["mean_ratio"] = None
             data["verdicts"] = ["OVERFIT"]
             args.out.mkdir(parents=True, exist_ok=True)
-            (args.out / "report.md").write_text(render(data))
+            (args.out / "report.md").write_text(render(data), encoding="utf-8")
             (args.out / "summary.json").write_text(
-                json.dumps(data, indent=2)
+                json.dumps(data, indent=2), encoding="utf-8"
             )
             if args.ledger:
                 ledger_mod.append(
@@ -437,6 +466,7 @@ def main(argv=None, prog=None):
             categories=categories,
             calibration=calibration,
             decision=args.decision,
+            held_ids=manifest_ids(seed_name),
         )
         r["by_family"] = by_family(r, suite_base, suite_cand, hb, hc,
                                    family_of, categories)
@@ -451,11 +481,14 @@ def main(argv=None, prog=None):
     data["stable"] = aggregate["stable"]
     data["verdict"] = aggregate["verdict"]
     data["mean_gap"] = aggregate["mean_gap"]
-    # v0.2: the sets of the seeds are disjuntos between si (generate --seeds
-    # excludes the tasks of the seeds previous), then gives for join all
-    # held-out tasks num bootstrap only: n larger, CI more narrow.
+    # v0.2: the seeds' sets are disjoint (generate --seeds excludes the
+    # previous seeds' tasks), so all held-out tasks can be pooled into one
+    # bootstrap: larger n, narrower CI.
+    pooled_ids = ["%s/%s" % (name, t) for name, _ in sets
+                  for t in manifest_ids(name)]
     pooled = gap_mod.analyze(suite_base, suite_cand, pooled_hb, pooled_hc,
-                             calibration=calibration, decision="ci")
+                             calibration=calibration, decision="ci",
+                             held_ids=pooled_ids)
     data["pooled"] = {
         "n_held": pooled["n_held"],
         "verdict_ci": pooled["verdict_ci"],
@@ -487,8 +520,9 @@ def main(argv=None, prog=None):
             },
         )
     args.out.mkdir(parents=True, exist_ok=True)
-    (args.out / "report.md").write_text(render(data))
-    (args.out / "summary.json").write_text(json.dumps(data, indent=2))
+    (args.out / "report.md").write_text(render(data), encoding="utf-8")
+    (args.out / "summary.json").write_text(json.dumps(data, indent=2),
+                                           encoding="utf-8")
     if args.ledger:
         ledger_mod.append(
             args.ledger,

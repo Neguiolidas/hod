@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Test of smoke of the CLI unificado: generate + gap + audit via hod.cli,
-and version of the package batendo with the pyproject.
+"""Smoke test of the unified CLI: generate + gap + audit via hod.cli, and
+the package version matching pyproject.toml.
 
 Usage: python3 tests/test_cli.py (code 0 = everything passes).
 """
@@ -83,7 +83,7 @@ def main():
 
 
 def test_main():
-    """Wrapper for the pytest coletar the test in format of script."""
+    """Wrapper so pytest collects the script-format test."""
     assert main() == 0
 
 

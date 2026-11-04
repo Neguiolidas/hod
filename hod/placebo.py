@@ -12,8 +12,10 @@ Usage:
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
+
 
 
 def load_ledger(path):
@@ -24,17 +26,23 @@ def load_ledger(path):
     return load(path)
 
 
+def _finite(value):
+    """A usable number: int/float, not bool, not NaN/inf."""
+    return (not isinstance(value, bool) and isinstance(value, (int, float))
+            and math.isfinite(value))
+
+
 def stats(entries):
     usable = [
         e for e in entries
-        if e.get("placebo") and not e.get("wave_stopped")
-        and isinstance(e.get("gap"), (int, float))
+        if isinstance(e, dict) and e.get("placebo") is True
+        and not e.get("wave_stopped") and _finite(e.get("gap"))
     ]
     gaps = [e["gap"] for e in usable]
     suite = [abs(e["suite_delta"]) for e in usable
-             if isinstance(e.get("suite_delta"), (int, float))]
+             if _finite(e.get("suite_delta"))]
     held = [abs(e["held_delta"]) for e in usable
-            if isinstance(e.get("held_delta"), (int, float))]
+            if _finite(e.get("held_delta"))]
     if not gaps:
         return {
             "n_placebo": 0,
@@ -65,7 +73,11 @@ def main(argv=None, prog=None):
     parser.add_argument("--ledger", type=Path, required=True)
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)
-    result = stats(load_ledger(args.ledger))
+    try:
+        result = stats(load_ledger(args.ledger))
+    except (ValueError, OSError) as e:
+        print("placebo: %s" % e, file=sys.stderr)
+        return 1
     print(
         "placebos: n=%d, mean gap=%+.3f, sd=%.3f, largest |gap|=%.3f"
         % (
@@ -76,7 +88,8 @@ def main(argv=None, prog=None):
         )
     )
     if args.out:
-        args.out.write_text(json.dumps(result, indent=2))
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps(result, indent=2), encoding="utf-8")
         print("calibration written: %s" % args.out)
     return 0
 

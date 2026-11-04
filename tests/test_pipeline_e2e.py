@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Pipeline ponta the ponta, synthetic: prereg -> generation multi-seed ->
+"""End-to-end synthetic pipeline: prereg -> multi-seed generation ->
 scoreboards -> pipeline (genuine stable + match) -> wave 1 stop ->
-prereg late recusado -> placebo with significance.
+late prereg refused -> placebo with significance.
 
-Usage: python3 tests/test_pipeline_and2and.py (code 0 = everything passes).
+Usage: python3 tests/test_pipeline_e2e.py (code 0 = everything passes).
 """
 
 import json
@@ -56,7 +56,7 @@ def main():
         tmp = Path(tmp)
         catalog = _catalog(tmp)
         held_dir = tmp / "held"
-        # prereg Before of the generation (mtime forced for the passado).
+        # prereg before the generation (mtime forced into the past).
         prereg_path = tmp / "prereg.json"
         prereg_path.write_text(
             json.dumps(prereg_mod.create("change e2e", "up", "up", 0.75))
@@ -64,7 +64,7 @@ def main():
         old = time.time() - 60
         os.utime(prereg_path, (old, old))
         rc = cli.main([
-            "generate", "--seeds", "7,8", "--n", "4",
+            "generate", "--seeds", "7,8", "--n", "8",
             "--out", str(held_dir), "--catalog", str(catalog),
         ])
         assert rc == 0, "generate multi-seed failed"
@@ -73,9 +73,11 @@ def main():
         ids7 = _held_ids(held_dir, "7")
         ids8 = _held_ids(held_dir, "8")
         scores = tmp / "scores"
+        # n >= stats.MIN_N_CI on both sides: below it no CI verdict is asserted
+        suite_ids = ["s%d" % i for i in range(8)]
         _write_scores(
             scores,
-            {"s0": 1, "s1": 1}, {"s0": 2, "s1": 2},
+            {t: 1 for t in suite_ids}, {t: 2 for t in suite_ids},
             {
                 "held-base-7": {t: 1 for t in ids7},
                 "held-cand-7": {t: 2 for t in ids7},
@@ -104,13 +106,11 @@ def main():
         assert len(entries) == 1 and entries[0]["verdict"] == "GENUINE"
         print("ok: stable genuine pipeline + hypothesis match + ledger")
 
-        # wave 1 stop: primeiros 2 of the seed 7 without improvement in the held-out.
+        # wave 1 stop: seed 7 without improvement in the held-out, so whichever
+        # tasks the stratified wave picks, it sees OVERFIT.
         wave_scores = tmp / "scores-wave"
         shutil.copytree(scores, wave_scores)
-        wave_ids = sorted(ids7)[:2]
-        cand7 = {t: 2 for t in ids7}
-        for t in wave_ids:
-            cand7[t] = 1
+        cand7 = {t: 1 for t in ids7}
         (wave_scores / "held-cand-7.json").write_text(json.dumps(cand7))
         out_wave = tmp / "pipe-wave"
         rc = cli.main([
@@ -118,7 +118,7 @@ def main():
             "--prereg", str(prereg_path),
             "--heldout-dir", str(held_dir),
             "--scores-dir", str(wave_scores),
-            "--seeds", "7,8", "--wave1", "2",
+            "--seeds", "7,8", "--wave1", "6",
             "--out", str(out_wave),
         ])
         assert rc == 3, "wave 1 should stop with code 3, got %d" % rc
@@ -126,7 +126,7 @@ def main():
         assert wave_summary["wave_stopped"] is True
         print("ok: wave 1 stopped (OVERFIT, without expanding)")
 
-        # prereg late recusado.
+        # late prereg refused.
         held2 = tmp / "held2"
         rc = cli.main([
             "generate", "--seed", "9", "--n", "2",
@@ -184,7 +184,7 @@ def main():
 
 
 def test_main():
-    """Wrapper for the pytest coletar the test in format of script."""
+    """Wrapper so pytest collects the script-format test."""
     assert main() == 0
 
 

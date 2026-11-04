@@ -1,5 +1,82 @@
 # Changelog
 
+## Unreleased
+
+Audit of v0.1.1: corrections and improvements. Some verdicts change on
+purpose (marked **behavior change**); every fix has a regression test in
+`tests/test_fixes_core.py`, `tests/test_fixes_generator.py` or
+`tests/test_fixes_improve.py`.
+
+### Measurement core (stats, gap, scores, sanity, agree, placebo)
+
+- **Behavior change:** a side with fewer than 6 paired tasks (`stats.MIN_N_CI`)
+  can no longer be "up" or "down". Before, one task per side gave GENUINE
+  with a zero-width CI, and under a true null 2 tasks excluded zero ~47% of
+  the time. Such cases are now INCONCLUSIVE; a significant drop on a side
+  that has enough tasks is still REGRESSION.
+- **Behavior change:** coverage below 90% now makes `verdict` INCONCLUSIVE
+  under `--decision point` too (`verdict_point` keeps the raw rule).
+- Coverage can count tasks missing from both score files: `gap --manifest`
+  (and `analyze(held_ids=...)`, used by the pipeline) sets the denominator;
+  before, 10 scored tasks out of 40 read as 100% coverage.
+- An effect equal to the placebo floor at its stored precision (3 decimals)
+  is a tie, not "above the noise": a placebo of 0.333 no longer lets an
+  identical 1/3 effect through as GENUINE / significant (p_gap is 1.0).
+- Verdicts are decided on unrounded values (`bootstrap["exact"]`); a transfer
+  of 74.994% no longer rounds up to GENUINE.
+- `--boot` / `n_boot` must be >= 200 (0 crashed, negative values gave an
+  invented verdict, 1 built a "CI" from one replica).
+- Old calibrations with only `max_abs_gap` no longer give a silent zero noise
+  floor; the floor falls back to the gap, as the significance check did.
+- Per-family regression guard resamples in sorted id order: the same data in
+  another JSON key order no longer flips `regressed`. Its rule labels are now
+  `ci` / `margin` (were `ic` / `margem`).
+- `n_held_needed` is a true ceiling; the GENUINE reason no longer prints a
+  literal `95%%`.
+- Score files: a duplicate task id is an error (it kept one of two
+  contradictory scores). All JSON inputs go through `scores.read_json`:
+  missing files, directories, bad JSON and wrong top-level types give a
+  one-line error instead of a traceback in `gap`, `sanity`, `agree`,
+  `placebo`, `ledger`, `prereg` and `pipeline`.
+- New `hod/manifest.py`: one validator for manifests (unique ids and files,
+  task file names that cannot leave the set directory).
+- `sanity` requires at least 6 shared tasks and 90% coverage (1 shared task
+  used to pass), and lists why it failed.
+- `placebo` ignores malformed ledger entries: bool or NaN gaps, and
+  `"placebo": "false"` as a string (only a literal `true` is a placebo, here
+  and in `hod ledger`).
+
+### Ledger, prereg, pipeline
+
+- Ledger: a line torn by a crashed writer no longer swallows the next entry
+  (the torn line is closed before appending); a UTF-8 character cut in half
+  no longer crashes `hod ledger` / `hod placebo`; best-effort lock on Windows
+  (`<ledger>.lock`, untested in CI).
+- Prereg: `hod prereg --seeds 42,43,44` commits to the generation salts in
+  advance; bound sets must use exactly those salts, all of them, which blocks
+  "seed shopping" (generate many bound sets, keep the best). `prereg` files
+  are validated on load; `--min-ratio` outside [0, 1] and a negative
+  `--flat-tol` are clean errors.
+- Pipeline: refuses a mix of bound and unbound sets (it used to fall back to
+  the weak mtime check for all of them) and a bound `seed-N` directory whose
+  salt is not N; coverage per seed and pooled is measured against the
+  manifests; `--wave1` must be >= 1, with a warning when it is too small for
+  the CI decision to ever stop; malformed manifests, calibration, categories
+  and prereg files are one-line errors.
+
+### Packaging and CI
+
+- `pyproject.toml`: SPDX `license = "Apache-2.0"` plus `license-files`
+  (setuptools announced that the table form stops building after
+  2027-02-18); classifiers for Python 3.13 and 3.14.
+- `hod.__version__` is a literal checked against `pyproject.toml` by the
+  tests; reading it from installed metadata reported a stale installed copy
+  when running from a checkout.
+- CI: test matrix 3.10 to 3.14; new `package` job builds the wheel, installs
+  it in a clean venv outside the checkout and runs `hod --version` and
+  `hod demo`. Release: a manual run is a build-only dry run (it used to fail
+  the tag check), and only a `v*` tag publishes.
+
 ## v0.1.1 — 2026-10-23
 
 - README: installation now leads with `pip install hod` (the package is on PyPI); the Layout section no longer lists `runs/` as shipped content (`runs/` is local output, gitignored); the Canary section states the canary runner is external to this package and documents the harness-side variables it uses.

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Control positive of the instrumento: the detector must acertar 3 cases
-synthetic known before merecer confidence in cases real.
+"""Positive controls of the instrument: the detector must get known
+synthetic cases right before it deserves confidence on real cases.
 
-- Overfit planted: suite rises, held-out stopped -> OVERFIT.
-- Improvement genuine: suite and held-out rise together -> Genuine.
-- Case partial: held-out captures little more of the half of the gain -> Partial.
-- Without improvement: suite not rises -> Without Improvement.
+- Planted overfit: suite rises, held-out flat -> OVERFIT.
+- Genuine improvement: suite and held-out rise together -> GENUINE.
+- Partial case: held-out captures a bit more than half of the gain -> PARTIAL.
+- The same partial pattern on 4 tasks per side -> INCONCLUSIVE (too few
+  tasks for a CI: nothing may be asserted).
+- No improvement: suite does not rise -> NO IMPROVEMENT.
 
 Usage: python3 test_positive_control.py (code 0 = all controls pass).
 """
@@ -24,7 +26,7 @@ def scores(n, value):
 
 def check(name, result, expected):
     got = result["verdict"]
-    assert got == expected, "%s: esperado %s, veio %s" % (name, expected, got)
+    assert got == expected, "%s: expected %s, got %s" % (name, expected, got)
     print("ok: %s -> %s" % (name, got))
 
 
@@ -33,7 +35,7 @@ def main():
     held_base = scores(8, 1)
 
     check(
-        "overfit plantado",
+        "planted overfit",
         analyze(suite_base, scores(21, 2), held_base, scores(8, 1)),
         "OVERFIT",
     )
@@ -43,26 +45,37 @@ def main():
         "GENUINE",
     )
     check(
-        "caso parcial",
+        "partial case",
+        analyze(
+            scores(8, 0),
+            scores(8, 2),
+            {"h%d" % i: i % 2 for i in range(8)},
+            {"h%d" % i: i % 2 + 1 for i in range(8)},
+        ),
+        "PARTIAL",
+    )
+    # the same pattern with 4 tasks per side: too few for a CI, nothing asserted
+    check(
+        "partial case, n=4",
         analyze(
             scores(4, 0),
             scores(4, 2),
             {"h0": 0, "h1": 0, "h2": 1, "h3": 1},
             {"h0": 1, "h1": 1, "h2": 2, "h3": 2},
         ),
-        "PARTIAL",
+        "INCONCLUSIVE",
     )
     check(
-        "sem melhora",
+        "no improvement",
         analyze(suite_base, scores(21, 1), held_base, scores(8, 2)),
         "NO IMPROVEMENT",
     )
-    print("positive controls: 4/4")
+    print("positive controls: 5/5")
     return 0
 
 
 def test_main():
-    """Wrapper for the pytest coletar the test in format of script."""
+    """Wrapper so pytest collects the script-format test."""
     assert main() == 0
 
 

@@ -2,9 +2,7 @@
 is real and when it is just fitting to the evaluation suite.
 """
 
-try:
-    from importlib.metadata import version as _pkg_version
-
-    __version__ = _pkg_version("hod")
-except Exception:
-    __version__ = "0.1.1"
+# Single literal, kept equal to pyproject.toml by tests/test_cli.py. Reading
+# it from importlib.metadata reported a stale installed copy when running
+# from a checkout (`python3 -m hod --version`).
+__version__ = "0.1.1"

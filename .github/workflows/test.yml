@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
 
@@ -26,3 +26,30 @@ jobs:
 
       - name: "Lint (pyflakes: real bugs only)"
         run: ruff check --select F hod/ tests/
+
+  package:
+    # the wheel users get from PyPI: build it, install it in a clean venv
+    # outside the checkout and run the installed `hod` command end to end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build and check
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          twine check dist/*
+
+      - name: Install the wheel and smoke-test the CLI
+        run: |
+          python -m venv /tmp/hod-venv
+          /tmp/hod-venv/bin/pip install dist/*.whl
+          cd /tmp
+          VERSION=$(grep -m1 '^version' "$GITHUB_WORKSPACE/pyproject.toml" | sed 's/.*"\(.*\)"/\1/')
+          test "$(/tmp/hod-venv/bin/hod --version)" = "hod $VERSION"
+          /tmp/hod-venv/bin/hod demo --out /tmp/hod-demo

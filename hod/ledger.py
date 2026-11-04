@@ -24,67 +24,107 @@ import argparse
 import json
 import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 try:
     import fcntl
-except ImportError:  # Windows: no lock, append stays atomic for a short line
+except ImportError:  # Windows
     fcntl = None
+try:
+    import msvcrt
+except ImportError:  # POSIX
+    msvcrt = None
 
 PRIOR = 1.0
 
 
-def append(path, entry):
-    """Append of the line with lock exclusivo and fsync.
+@contextmanager
+def _locked(f, path):
+    """Exclusive lock while appending. POSIX: flock on the ledger itself.
+    Windows (best effort, untested in CI): msvcrt lock on a side file
+    `<ledger>.lock`, because append mode there is seek + write."""
+    if fcntl:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    elif msvcrt:
+        with open(str(path) + ".lock", "a+b") as lock:
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        yield
 
-    The written only by line, with lock: pipeline and hook of the canary running
-    to the same time not intercalam bytes; fsync avoids line truncada after
-    drop of energia.
+
+def append(path, entry):
+    """Appends one line with an exclusive lock and fsync.
+
+    One write per line, under the lock: the pipeline and the canary hook
+    running at the same time do not interleave bytes; fsync avoids a
+    truncated line after a power loss. If a previous writer died mid-line
+    (the file does not end in a newline), the torn line is closed first, so
+    it costs only itself and never swallows the entry written after it.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = (json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8")
-    with open(path, "ab") as f:
-        if fcntl:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        try:
+    with open(path, "a+b") as f:
+        with _locked(f, path):
+            f.seek(0, os.SEEK_END)
+            if f.tell() > 0:
+                f.seek(-1, os.SEEK_END)
+                if f.read(1) != b"\n":
+                    data = b"\n" + data
+                f.seek(0, os.SEEK_END)
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        finally:
-            if fcntl:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     return entry
 
 
 def load(path, strict=False):
-    """Reads the ledger; lines corrompidas are puladas with warning (strict=True
-    levanta). The line truncada not derruba more the report integer."""
+    """Reads the ledger; corrupted lines (invalid JSON, or UTF-8 cut in the
+    middle of a character) are skipped with a warning (strict=True raises).
+    A truncated line never takes the whole report down."""
+    path = Path(path)
+    if not path.is_file():
+        raise ValueError("ledger missing: %s" % path)
     entries = []
-    bad = 0
-    for lineno, line in enumerate(Path(path).read_text().splitlines(), 1):
-        line = line.strip()
-        if not line:
+    for lineno, raw in enumerate(path.read_bytes().split(b"\n"), 1):
+        raw = raw.strip()
+        if not raw:
             continue
         try:
-            entry = json.loads(line)
-        except json.JSONDecodeError as e:
+            entry = json.loads(raw.decode("utf-8"))
+        except ValueError as e:  # JSONDecodeError and UnicodeDecodeError
             if strict:
                 raise ValueError("ledger %s line %d: %s" % (path, lineno, e))
-            bad += 1
             print("warning: ledger %s line %d corrupted, ignored"
                   % (path, lineno), file=sys.stderr)
             continue
         if isinstance(entry, dict):
             entries.append(entry)
-        else:
-            bad += 1
+        elif strict:
+            raise ValueError("ledger %s line %d: not a JSON object"
+                             % (path, lineno))
     return entries
 
 
+def is_placebo(entry):
+    """Only a literal `true` marks a placebo ("false" as a string does not)."""
+    return entry.get("placebo") is True
+
+
 def report(entries):
-    real = [e for e in entries if not e.get("placebo")]
-    placebo = [e for e in entries if e.get("placebo")]
+    real = [e for e in entries if not is_placebo(e)]
+    placebo = [e for e in entries if is_placebo(e)]
     verdict_counts = {}
     for e in real:
         verdict_counts[e.get("verdict", "?")] = (
@@ -123,7 +163,11 @@ def main(argv=None, prog=None):
     parser.add_argument("--ledger", type=Path, required=True)
     parser.add_argument("--weights-out", type=Path, default=None)
     args = parser.parse_args(argv)
-    result = report(load(args.ledger))
+    try:
+        result = report(load(args.ledger))
+    except (ValueError, OSError) as e:
+        print("ledger: %s" % e, file=sys.stderr)
+        return 1
     print(
         "ledger: %d rounds (%d real, %d placebos), overfit %.1f%%"
         % (
@@ -138,7 +182,9 @@ def main(argv=None, prog=None):
     if result["ready_for_gate_promotion"]:
         print("ready to evaluate promotion of the blocking gate (3+ changes).")
     if args.weights_out:
-        args.weights_out.write_text(json.dumps(result["weights"], indent=2))
+        args.weights_out.parent.mkdir(parents=True, exist_ok=True)
+        args.weights_out.write_text(json.dumps(result["weights"], indent=2),
+                                    encoding="utf-8")
         print("weights written: %s" % args.weights_out)
     return 0
 

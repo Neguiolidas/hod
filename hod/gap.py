@@ -24,24 +24,28 @@ leaves `verdict_point` in the report. Details in stats.py.
 
 Deltas are paired: only tasks present in both base and candidate count
 (missing ones appear in `unpaired`).
+
+Coverage (minimum 90%, both decisions): the fraction of expected tasks with a
+score on both sides. Expected tasks are the ones in `--manifest` when given;
+otherwise the union of the base and candidate files, which cannot see a task
+missing from both.
 """
 
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 try:
-    from .scores import load_scores
+    from .scores import load_scores, read_json
     from . import stats as stats_mod
 except ImportError:  # direct execution of the file, outside the package
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from scores import load_scores  # noqa: E402
+    from scores import load_scores, read_json  # noqa: E402
     import stats as stats_mod  # noqa: E402
 
 SMALL_N = 8
-MIN_COVERAGE = 0.90  # minimum fraction of tasks with a score on both sides
+MIN_COVERAGE = stats_mod.MIN_COVERAGE  # fraction of tasks scored on both sides
 DECISIONS = ("ci", "point")
 GENUINE_RATIO = 0.75
 PARTIAL_RATIO = 0.50
@@ -78,15 +82,18 @@ def verdict(suite_delta, held_delta):
 
 
 def _significance(result, suite_delta, held_delta, gap, calibration):
-    """Compares the observado with the noise measured in rounds placebo.
+    """Compares the observed values with the noise measured in placebo rounds.
 
-    - effect (suite): |suite_delta| against the larger |suite_delta| placebo
-      (fallback for the larger |gap| in calibrations old);
-    - gap: |gap| against the larger |gap| placebo, more the p-valor empirical
-      (1 + #placebos with |gap| >= |gap observado|) / (n + 1).
-    Without placebos there is in the noise measured: nothing is declarado significant.
+    - effect (suite): |suite_delta| against the largest placebo |suite_delta|
+      (falls back to the largest |gap| in old calibrations);
+    - gap: |gap| against the largest placebo |gap|, plus the empirical
+      p-value (1 + #placebos with |gap| >= |observed gap|) / (n + 1).
+    Placebo values are stored rounded to 3 decimals, so a tie within half of
+    that unit counts as a tie (not significant), never as "above the noise".
+    Without placebos there is no measured noise: nothing is declared significant.
     """
-    n_placebo = int(calibration.get("n_placebo", 0) or 0)
+    floor = stats_mod.noise_floor(calibration)
+    n_placebo = floor["n_placebo"]
     result["n_placebo"] = n_placebo
     if n_placebo < 1:
         result["significant"] = None
@@ -94,16 +101,18 @@ def _significance(result, suite_delta, held_delta, gap, calibration):
         result["noise_max"] = None
         result["noise_note"] = "no placebos: noise not measured"
         return
-    noise_gap = float(calibration.get("max_abs_gap", 0.0))
-    noise_suite = calibration.get("max_abs_suite_delta")
-    noise_suite = float(noise_gap if noise_suite is None else noise_suite)
+    noise_gap = abs(stats_mod._num(calibration.get("max_abs_gap")) or 0.0)
+    noise_suite = floor["suite"]
     result["noise_max"] = noise_gap
     result["noise_suite_max"] = noise_suite
-    result["significant"] = abs(suite_delta) > noise_suite + EPS
-    result["gap_significant"] = abs(gap) > noise_gap + EPS
+    result["significant"] = stats_mod.beyond_floor(abs(suite_delta), noise_suite)
+    result["gap_significant"] = stats_mod.beyond_floor(abs(gap), noise_gap)
     gaps = calibration.get("gaps")
+    gaps = [g for g in (gaps if isinstance(gaps, list) else [])
+            if stats_mod._num(g) is not None]
     if gaps:
-        hits = sum(1 for g in gaps if abs(g) >= abs(gap) - EPS)
+        hits = sum(1 for g in gaps
+                   if abs(g) >= abs(gap) - stats_mod.FLOOR_TOL)
         result["p_gap"] = round((1 + hits) / (len(gaps) + 1), 3)
     if result["verdict"] in ("OVERFIT", "PARTIAL") and not result["gap_significant"]:
         result["noise_note"] = "gap within placebo noise"
@@ -112,7 +121,7 @@ def _significance(result, suite_delta, held_delta, gap, calibration):
 def analyze(suite_base, suite_cand, held_base, held_cand,
             categories=None, calibration=None, decision="ci",
             n_boot=stats_mod.DEFAULT_BOOT, boot_seed=stats_mod.DEFAULT_SEED,
-            strict=False):
+            strict=False, suite_ids=None, held_ids=None):
     """Gap with two verdicts:
 
     - `verdict_point`: the v0.1 rule (held/suite ratio at the points);
@@ -120,12 +129,25 @@ def analyze(suite_base, suite_cand, held_base, held_cand,
       + coverage), see stats.py.
 
     `verdict` is the one of the chosen `decision` ("ci", default since v0.2,
-    or "point" to reproduce v0.1)."""
+    or "point" to reproduce v0.1). Under either decision, coverage below
+    MIN_COVERAGE makes `verdict` INCONCLUSIVE (`verdict_point` keeps the raw
+    rule). `suite_ids` / `held_ids` are the expected task ids (e.g. the
+    manifest): without them a task missing from both files is invisible."""
     if decision not in DECISIONS:
         raise ValueError("decision must be one of %s" % (DECISIONS,))
+    stats_mod.check_n_boot(n_boot)
     held_base_all, held_cand_all = held_base, held_cand
-    suite_union = len(set(suite_base) | set(suite_cand))
-    held_union = len(set(held_base) | set(held_cand))
+
+    def _coverage(base, cand, expected):
+        both = set(base) & set(cand)
+        if expected is not None:
+            expected = set(expected)
+            return round(len(both & expected) / len(expected), 4) if expected else 0.0
+        union = set(base) | set(cand)
+        return round(len(both) / len(union), 4) if union else 0.0
+
+    coverage = {"suite": _coverage(suite_base, suite_cand, suite_ids),
+                "held": _coverage(held_base, held_cand, held_ids)}
     suite_base, suite_cand, suite_unpaired = paired(suite_base, suite_cand)
     held_base, held_cand, held_unpaired = paired(held_base, held_cand)
     if not suite_base:
@@ -192,31 +214,32 @@ def analyze(suite_base, suite_cand, held_base, held_cand,
                 "n_held": len(hb),
             }
         result["by_category"] = by_category
-    if calibration is not None:
-        _significance(result, suite_delta, held_delta, gap, calibration)
     # --- v0.2: CI, noise floor, power, coverage -------------------------
     result["verdict_point"] = v
     summary = stats_mod.summarize(suite_base, suite_cand, held_base,
                                   held_cand, calibration=calibration,
                                   n_boot=n_boot, seed=boot_seed, strict=strict)
-    coverage = {
-        "suite": round(len(suite_base) / suite_union, 4) if suite_union else 0.0,
-        "held": round(len(held_base) / held_union, 4) if held_union else 0.0,
-    }
     summary["coverage"] = coverage
     v_ci, why = summary["verdict"], list(summary["why"])
-    if min(coverage.values()) < MIN_COVERAGE - EPS:
-        # task without the score is "not run", never "passed": with very missing the
-        # verdict not if sustenta, seja which for the number
+    coverage_ok = min(coverage.values()) >= MIN_COVERAGE - EPS
+    if not coverage_ok:
+        # a task without a score is "not run", never "passed": with many
+        # missing, no verdict holds, whatever the numbers say
         why.append("coverage below %.0f%% (suite %.0f%%, held-out %.0f%%)"
                    % (MIN_COVERAGE * 100, coverage["suite"] * 100,
                       coverage["held"] * 100))
         v_ci = "INCONCLUSIVE"
     summary["verdict"], summary["why"] = v_ci, why
     result["verdict_ci"] = v_ci
+    result["coverage_ok"] = coverage_ok
     result["stats"] = summary
     result["decision"] = decision
-    result["verdict"] = v_ci if decision == "ci" else v
+    if decision == "ci":
+        result["verdict"] = v_ci
+    else:
+        result["verdict"] = v if coverage_ok else "INCONCLUSIVE"
+    if calibration is not None:
+        _significance(result, suite_delta, held_delta, gap, calibration)
     return result
 
 
@@ -363,6 +386,23 @@ def load(path):
     return load_scores(path)
 
 
+def boot_arg(value):
+    """argparse type for --boot: an integer >= stats.MIN_BOOT."""
+    try:
+        return stats_mod.check_n_boot(int(value))
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e))
+
+
+def manifest_ids(path):
+    manifest = read_json(path, "manifest", expect=dict)
+    tasks = manifest.get("tasks")
+    if not isinstance(tasks, list) or not all(
+            isinstance(t, dict) and isinstance(t.get("id"), str) for t in tasks):
+        raise ValueError("manifest %s: expected tasks with an id" % path)
+    return [t["id"] for t in tasks]
+
+
 def main(argv=None, prog=None):
     parser = argparse.ArgumentParser(prog=prog)
     parser.add_argument("--suite-base", type=Path, required=True)
@@ -373,53 +413,74 @@ def main(argv=None, prog=None):
     parser.add_argument("--categories", type=Path, default=None)
     parser.add_argument("--calibration", type=Path, default=None)
     parser.add_argument("--prereg", type=Path, default=None)
+    parser.add_argument("--manifest", type=Path, default=None,
+                        help="held-out manifest: coverage counts its tasks "
+                        "(a task missing from both score files is caught) and "
+                        "a score id outside it is an error")
     parser.add_argument(
         "--decision", choices=DECISIONS, default="ci",
         help="ci (default): verdict by confidence interval and noise floor; "
         "point: v0.1 point rule",
     )
-    parser.add_argument("--boot", type=int, default=stats_mod.DEFAULT_BOOT,
-                        help="bootstrap replicas (default %(default)s)")
+    parser.add_argument("--boot", type=boot_arg, default=stats_mod.DEFAULT_BOOT,
+                        help="bootstrap replicas, >= %d (default %%(default)s)"
+                        % stats_mod.MIN_BOOT)
     parser.add_argument("--strict", action="store_true",
                         help="GENUINE requires transfer ≥ ½ with 95%% "
                         "confidence (asks for more tasks)")
     args = parser.parse_args(argv)
 
-    categories = None
-    if args.categories:
-        categories = json.loads(args.categories.read_text())
-    calibration = None
-    if args.calibration:
-        calibration = json.loads(args.calibration.read_text())
     try:
+        categories = None
+        if args.categories:
+            categories = read_json(args.categories, "categories file", expect=dict)
+        calibration = None
+        if args.calibration:
+            calibration = read_json(args.calibration, "calibration file",
+                                    expect=dict)
+        held_base, held_cand = load(args.held_base), load(args.held_cand)
+        held_ids = None
+        if args.manifest:
+            held_ids = manifest_ids(args.manifest)
+            extra = sorted((set(held_base) | set(held_cand)) - set(held_ids))
+            if extra:
+                raise ValueError("held-out scores have tasks outside the "
+                                 "manifest (scores from another set?): %s"
+                                 % extra[:10])
         result = analyze(
             load(args.suite_base),
             load(args.suite_cand),
-            load(args.held_base),
-            load(args.held_cand),
+            held_base,
+            held_cand,
             categories=categories,
             calibration=calibration,
             decision=args.decision,
             n_boot=args.boot,
             strict=args.strict,
+            held_ids=held_ids,
         )
-    except ValueError as e:
+        prereg = None
+        if args.prereg:
+            try:
+                from .prereg import load as prereg_load
+            except ImportError:  # direct execution of the file
+                from prereg import load as prereg_load  # noqa: E402
+            prereg = prereg_load(args.prereg)
+    except (ValueError, OSError, TypeError, KeyError) as e:
         print("gap: %s" % e, file=sys.stderr)
         return 1
-    if args.prereg:
+    if prereg is not None:
         try:
             from .prereg import check as prereg_check
-            from .prereg import load as prereg_load
         except ImportError:  # direct execution of the file
             from prereg import check as prereg_check  # noqa: E402
-            from prereg import load as prereg_load  # noqa: E402
         print(
             "warning: `hod gap` does not check peeking; use `hod pipeline "
             "--prereg` with sets generated by `hod generate --prereg`",
             file=sys.stderr,
         )
 
-        hypothesis = prereg_check(prereg_load(args.prereg), result)
+        hypothesis = prereg_check(prereg, result)
         result["hypothesis"] = hypothesis
         print(
             "hypothesis: %s (suite %s, held %s)"
@@ -429,7 +490,8 @@ def main(argv=None, prog=None):
                 "ok" if hypothesis["held_match"] else "no",
             )
         )
-    args.out.write_text(render(result))
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(render(result), encoding="utf-8")
     ci = result["stats"]["bootstrap"]["ci"]
     print(
         "verdict: %s (gap %+.3f CI [%+.3f, %+.3f], suite %+.3f, held-out "

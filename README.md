@@ -60,11 +60,12 @@ The output directory holds one `.md` file per task plus `manifest.json` (id, fam
 
 ### gap: suite vs held-out
 
-From suite and held-out scores before and after a change, reports means, deltas, the gap (suite minus held-out), 95% confidence intervals from a paired bootstrap, the placebo noise floor, coverage, power (minimum detectable effect and the held-out size you would need) and a verdict. Score files are JSON maps of `{task_id: 0|1|2}`. `--decision point` reproduces the 0.1 point rule; `--strict` asks for more evidence before GENUINE.
+From suite and held-out scores before and after a change, reports means, deltas, the gap (suite minus held-out), 95% confidence intervals from a paired bootstrap, the placebo noise floor, coverage, power (minimum detectable effect and the held-out size you would need) and a verdict. Score files are JSON maps of `{task_id: 0|1|2}`; a repeated task id in a file is an error, not "last one wins". `--decision point` reproduces the 0.1 point rule; `--strict` asks for more evidence before GENUINE; `--boot` sets the bootstrap replicas (at least 200). Pass `--manifest` with the held-out manifest so coverage counts every task of the set (without it, a task missing from both score files is invisible) and a score for a task outside the set is an error.
 
 ```bash
 hod gap --suite-base scores/suite-base.json --suite-cand scores/suite-cand.json \
-  --held-base scores/held-base.json --held-cand scores/held-cand.json --out gap-report.md
+  --held-base scores/held-base.json --held-cand scores/held-cand.json \
+  --manifest runs/heldout-42/manifest.json --out gap-report.md
 ```
 
 ### audit: contamination check
@@ -81,10 +82,17 @@ Beyond the three measurement sections, HOD has a robustness layer. Every layer i
 
 ### prereg: hypothesis first
 
-The change author declares what they expect before seeing the held-out set. The pipeline refuses to measure if the prereg file is newer than the generated sets (peeking). After the gap, the prediction is checked against the observation.
+The change author declares what they expect before seeing the held-out set. After the gap, the prediction is checked against the observation.
+
+Two levels of protection against peeking:
+
+- strong: sets generated with `hod generate --prereg prereg.json` derive their seed from the prereg's hash, and the pipeline verifies that binding. Declare the generation salts in the prereg (`--seeds 42,43,44`) and the pipeline also requires that the measured sets are exactly those salts, all of them: generating many bound sets and keeping the most favorable one no longer verifies. A bound `seed-N` directory must have been generated with salt N, and mixing bound and unbound sets in one run is refused;
+- weak: for sets generated without `--prereg`, the pipeline only refuses a prereg file newer than the manifests (mtime, easy to forge).
 
 ```bash
-hod prereg --change "new routing rule" --expect-held up --min-ratio 0.75 --out prereg.json
+hod prereg --change "new routing rule" --expect-held up --min-ratio 0.75 \
+  --seeds 42,43,44 --out prereg.json
+hod generate --seeds 42,43,44 --n 40 --prereg prereg.json --out runs/heldout
 hod gap ... --prereg prereg.json
 ```
 
@@ -108,7 +116,7 @@ hod gap ... --calibration calibration.json
 
 ### ledger: the feedback loop
 
-Every pipeline run and every canary report appends one JSONL line to the ledger (change, verdicts, gap, hypothesis, per-category verdicts). `hod ledger` reports totals, overfit rate and family weights: weight is 1 + the family's overfit rate, so the next generation looks harder where overfitting appeared most. `hod generate --family-weights weights.json` uses them; same seed plus same weights reproduces the same set.
+Every pipeline run and every canary report appends one JSONL line to the ledger (change, verdicts, gap, hypothesis, per-category verdicts). `hod ledger` reports totals, overfit rate and family weights: weight is 1 + the family's overfit rate, so the next generation looks harder where overfitting appeared most. `hod generate --family-weights weights.json` uses them; same seed plus same weights reproduces the same set. Appends are locked and fsynced (POSIX `flock`; on Windows a best-effort lock on `<ledger>.lock`); a line torn by a crashed writer is skipped with a warning and never swallows the entry written after it. Only `"placebo": true` marks a placebo.
 
 ```bash
 hod ledger --ledger runs/ledger.jsonl --weights-out weights.json
@@ -116,7 +124,7 @@ hod ledger --ledger runs/ledger.jsonl --weights-out weights.json
 
 ### sanity: does the evaluator separate good from bad?
 
-Before trusting any gap, score a known-good and a known-bad harness on the same tasks. `hod sanity` passes only if good − bad has a 95% CI above zero (and, with `--manifest`, if no family has good ≤ bad). An evaluator that accepts both versions measures nothing.
+Before trusting any gap, score a known-good and a known-bad harness on the same tasks. `hod sanity` passes only if good − bad has a 95% CI above zero on at least 6 shared tasks covering at least 90% of the tasks (of the manifest, with `--manifest`), and, with `--manifest`, if no family has good ≤ bad. An evaluator that accepts both versions measures nothing.
 
 ```bash
 hod sanity --good scores-good.json --bad scores-bad.json --manifest runs/heldout-42/manifest.json
@@ -141,7 +149,7 @@ hod unblind --scores run/heldout-blind.json --key keys/heldout-key.json --out ru
 
 ## Automation
 
-One command runs all layers end to end: prereg timing check, wave 1 gate, multi-seed gaps, hypothesis check, placebo significance, ledger append, report. Exit codes: 0 completed, 3 stopped at wave 1 (OVERFIT, no expansion), 1 validation failure.
+One command runs all layers end to end: prereg check, wave 1 gate, multi-seed gaps, hypothesis check, placebo significance, ledger append, report. Exit codes: 0 completed, 3 stopped at wave 1 (OVERFIT, no expansion), 1 validation failure (including malformed manifests, score or calibration files, which give a one-line error). Coverage is measured against each set's manifest. Under the default CI decision a wave 1 needs at least 6 tasks to be able to stop the run; a smaller `--wave1` is accepted with a warning.
 
 ```bash
 hod pipeline --change "new routing rule" --prereg prereg.json \
@@ -177,7 +185,9 @@ Hooks, not cron and not a daemon: automation is event-triggered. The canary run 
 
 ## How the verdict works
 
-Default (`--decision ci`). "Up" means the 95% CI is above zero and the point estimate is above the placebo noise floor; "down" is the mirror image. t50 = held − ½·suite and t75 = held − ¾·suite test the transfer as linear combinations, which stay stable when the suite gain is small.
+Default (`--decision ci`). "Up" means the 95% CI is above zero and the point estimate is above the placebo noise floor; "down" is the mirror image. t50 = held − ½·suite and t75 = held − ¾·suite test the transfer as linear combinations, which stay stable when the suite gain is small. Decisions use unrounded values; the report rounds only for display. Placebo values are stored with 3 decimals, so an effect equal to the floor at that precision is a tie, not "above the noise".
+
+Minimum size: a side (suite or held-out) with fewer than 6 paired tasks cannot be "up" or "down". With 1 to 5 tasks the percentile bootstrap collapses (one task gives a zero-width "CI"; under a true null, 2 tasks exclude zero about half the time), and 6 is the smallest n at which an all-same-sign result passes an exact two-sided sign test at 5%. Below that size the verdict is INCONCLUSIVE, except that a significant drop on the other side is still a REGRESSION. Even at 8 tasks the bootstrap is somewhat optimistic (about 7.6% false "up" at a nominal 5%), which is why reports warn below 30 tasks.
 
 | Condition | Verdict |
 | --- | --- |
@@ -189,7 +199,7 @@ Default (`--decision ci`). "Up" means the 95% CI is above zero and the point est
 | suite up, held-out up, otherwise | PARTIAL |
 | suite up, held-out CI does not separate transfer from overfit | INCONCLUSIVE |
 
-Coverage below 90% (tasks without a score) makes the verdict INCONCLUSIVE: a missing score is "not run", never "passed". The 0.1 point rule is still in every report as `verdict_point`:
+Coverage below 90% (tasks without a score) makes the verdict INCONCLUSIVE under both decisions: a missing score is "not run", never "passed". The 0.1 point rule is still in every report as `verdict_point` (the raw rule, before the coverage gate):
 
 | Suite delta | Held-out delta | Point verdict |
 | --- | --- | --- |
