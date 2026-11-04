@@ -34,9 +34,13 @@ Generates new tasks in catalog format (setup, instruction, expected behavior, au
 
 - validity: no empty field, no unfilled placeholder, complete 0/1/2 rubric;
 - similarity against the fixed suite (max of Jaccard and containment on 5-grams, ceiling 0.30);
-- novelty: setup + instruction compared with every task already in the set and with an exclusion buffer (`--exclude DIR`, sets already used), Jaccard on 3-grams, ceiling 0.60.
+- novelty: setup + instruction compared with every task already in the set and with an exclusion buffer (`--exclude DIR`, sets already used: a set directory or the `--out` of a `--seeds` batch), Jaccard on 3-grams, ceiling 0.60. An `--exclude` path that does not exist or holds no tasks is an error, so a typo cannot silently bring a used set back.
 
-If no candidate passes, generation fails closed instead of emitting a contaminated or duplicated task. Under the novelty gate the space is estimated at roughly 1,500 mutually distinct tasks (about 70 to 800 per family). With `--seeds`, each seed's set excludes the previous seeds' tasks, so multi-seed sets are disjoint.
+If no candidate passes, generation fails closed instead of emitting a contaminated or duplicated task. Writing is fail-closed too: a set is written to a temporary sibling directory and moved into place only when complete, and an existing `--out` is replaced only if it is empty or already a HOD set with nothing else in it (a directory with other files is refused, never wiped).
+
+Capacity: under the novelty gate the per-family pools add up to about 1,800 mutually distinct tasks (greedy count, from about 70 in gate-precedent to about 1,000 in destructive-order), but sampling is stratified across the 8 families and stops when the smallest family is exhausted. In practice a single set is capped at about 570 tasks, and a rotation of mutually excluding sets (`--exclude`, `--seeds`, every `improve` round plus its final exam) at about 510 to 545 tasks in total.
+
+With `--seeds`, each seed's set excludes the previous seeds' tasks, so multi-seed sets are disjoint. A batch is all or nothing: it is built in memory and, if writing fails, the sets written by that run are rolled back. Repeated seeds are refused, and so is an `--out` that already holds `seed-*` sets outside the batch (the pipeline would pick them up and they would overlap); pass them with `--exclude` or use a new `--out`. When weights leave remainder ties between families, the tie is broken by the seed (it was alphabetical, so the same families always won).
 
 ```bash
 # Generate 8 held-out tasks (seed 42 reproduces the same set)
@@ -56,7 +60,7 @@ hod generate --seed 44 --n 40 --out runs/heldout-44 --frontier frontier.json --f
 
 With weights (`--family-weights` or `--frontier`), each family gets a quota proportional to its weight (largest remainder), so the set stays stratified.
 
-The output directory holds one `.md` file per task plus `manifest.json` (id, family, file, sha256, max similarity).
+The output directory holds one `.md` file per task plus `manifest.json` (id, family, file, sha256 of the exact bytes written, max similarity). `hod audit` checks those hashes against the raw bytes, so a newline or encoding rewrite is caught.
 
 ### gap: suite vs held-out
 
@@ -98,7 +102,7 @@ hod gap ... --prereg prereg.json
 
 ### calibrate: difficulty and Q
 
-Baseline scores on the candidate tasks reveal which tasks discriminate and which are saturated. Difficulty is (2 - baseline) / 2, novelty is 1 - max similarity, and Q is validity x difficulty x novelty. Saturated tasks (baseline 2) are filtered out; if all saturate, the report says NO SIGNAL instead of measuring a gap on noise.
+Baseline scores on the candidate tasks reveal which tasks discriminate and which are saturated. Difficulty is (2 - baseline) / 2, novelty is 1 - max similarity to the suite (stored as `q_novelty`; the manifest's `novelty` stays the generator's), and Q is validity x difficulty x novelty. Saturated tasks (baseline 2) are filtered out; if all saturate, the report says NO SIGNAL instead of measuring a gap on noise.
 
 ```bash
 hod calibrate --heldout runs/heldout-42 --baseline held-base.json \
@@ -140,7 +144,7 @@ hod agree --a scores-rater1.json --b scores-rater2.json
 
 ### blind: anonymous scoring
 
-`hod blind` replaces task ids with shuffled t01..tNN ids and writes the key elsewhere; `hod unblind` restores real ids after scoring. Honest limit: with a single agent, the key exists on disk and the blinding is instruction-enforced (do not open the key); with a second rater who never sees the key, it is real blinding.
+`hod blind` replaces task ids with shuffled t01..tNN ids and writes the key elsewhere (the key may not be the template itself nor sit inside the held-out directory); `hod unblind` restores real ids after scoring. `unblind --allow-incomplete` validates the scores that are present and leaves unscored tasks out, so the gap coverage gate sees them as missing. Honest limits: with a single agent, the key exists on disk and the blinding is instruction-enforced (do not open the key); with a second rater who never sees the key, it is real blinding. The task files themselves still carry their real ids (file names and the `# ID:` header): blinding hides the mapping in the answer sheet, not the tasks.
 
 ```bash
 hod blind --heldout runs/heldout-42 --template run/heldout-blind.json --key keys/heldout-key.json
@@ -222,7 +226,8 @@ HOD does not ship a canary runner: the canary is the harness that embeds HOD, no
 ```text
 hod/         the package: cli, generate, gap, stats, audit, families,
              prereg, calibrate, placebo, ledger, agree, blind, sanity,
-             pipeline, improve, toy, demo
+             pipeline, improve, toy, demo; scores and manifest (input
+             readers and validators shared by all sections)
 tests/       synthetic positive controls + CLI smoke test + robustness +
              pipeline e2e + audit regressions + stats, generator, improve
 runs/        NOT shipped: created locally by the commands above

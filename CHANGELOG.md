@@ -64,6 +64,44 @@ purpose (marked **behavior change**); every fix has a regression test in
   the CI decision to ever stop; malformed manifests, calibration, categories
   and prereg files are one-line errors.
 
+### Generator, audit, calibrate, blind
+
+- calibrate: an `--out` that aliases the source without resolving to the
+  same path (bind mount, case-insensitive filesystem) used to delete the
+  source set before reading it. The source is now read into memory first and
+  `samefile` is checked; `--out == source` is a clean error before anything
+  is written.
+- Manifests are validated everywhere (`hod/manifest.py`): a `file` like
+  `../x.md` can no longer make calibrate write outside `--out`, and a
+  duplicate id can no longer hide a task from every audit check.
+- generate: `--exclude` with a missing or empty directory is an error (a typo
+  silently reproduced a used set). `--n` must be >= 1 (0 wiped the set and
+  crashed). Sets are written to a temporary sibling and moved into place;
+  an existing `--out` is replaced only if empty or a HOD set with nothing
+  else in it (**behavior change:** extra files in a set directory are now
+  refused; a foreign `manifest.json` is never overwritten). All files are
+  read and written as UTF-8.
+- generate `--seeds`: all or nothing (rolled back on a write failure);
+  repeated seeds, non-integers and an `--out` holding other `seed-*` sets are
+  refused.
+- generate: quota remainder ties are broken by the seed instead of
+  alphabetically (**behavior change** for weighted sets with tied
+  remainders; uniform sets and untied weights generate the same sets).
+- generate: weights and `--frontier` input are validated (family keys,
+  finite values in range; NaN made the novelty gate pass everything).
+- Normalization keeps casefold results whole (`İSTANBUL` split into
+  `i` + `stanbul`); default outputs are unchanged.
+- audit hashes the raw bytes and generate hashes exactly the bytes it writes
+  (a CRLF rewrite passed as "hashes: ok").
+- calibrate keeps the generator's `novelty` and stores the Q component as
+  `q_novelty` (it overwrote 30 of 40 values).
+- blind: `unblind --allow-incomplete` validates present scores and drops
+  unscored placeholders (its output used to be unreadable by `gap`); the key
+  can no longer be written into the template or inside the held-out set.
+- README: capacity corrected. A single set is capped near 570 tasks and a
+  rotation of excluding sets near 510 to 545 in total (stratified sampling
+  stops at the smallest family), not "about 1,500".
+
 ### Packaging and CI
 
 - `pyproject.toml`: SPDX `license = "Apache-2.0"` plus `license-files`

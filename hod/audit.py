@@ -2,7 +2,8 @@
 """Audit of contamination of a held-out set.
 
 Checks:
-1. Manifest matches the directory (files and hashes).
+1. Manifest is valid (unique ids and files, safe file names, a family per
+   task) and matches the directory (files and sha256 of the raw bytes).
 2. No held-out task is a near-duplicate of another (pairwise, 5-grams).
 3. No held-out task exceeds the similarity ceiling against the suite.
 
@@ -12,17 +13,20 @@ Usage: hod audit --heldout runs/heldout-42 [--catalog ~/hod/catalog]
 
 import argparse
 import hashlib
-import json
 import sys
 from pathlib import Path
 
 try:
-    from .generate import THRESHOLD, jaccard, normalize, shingles, similarity
+    from .generate import (
+        THRESHOLD, jaccard, normalize, read_text, shingles, similarity,
+    )
+    from .manifest import load as load_manifest
 except ImportError:  # direct execution of the file, outside the package
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from generate import (  # noqa: E402
-        THRESHOLD, jaccard, normalize, shingles, similarity,
+        THRESHOLD, jaccard, normalize, read_text, shingles, similarity,
     )
+    from manifest import load as load_manifest  # noqa: E402
 
 
 def _section(text, title):
@@ -32,8 +36,8 @@ def _section(text, title):
 
 
 def main(argv=None, prog=None):
-    """Checks explicit (without assert: `python -O` removia all and the
-    audit passava any coisa). Returns 1 in any failure."""
+    """Explicit checks (no assert: `python -O` would strip them all and the
+    audit would pass anything). Returns 1 on any failure."""
     parser = argparse.ArgumentParser(prog=prog)
     parser.add_argument("--heldout", type=Path, required=True)
     parser.add_argument(
@@ -48,11 +52,16 @@ def main(argv=None, prog=None):
         failures.append(msg)
         print("FAIL: %s" % msg, file=sys.stderr)
 
-    manifest_path = args.heldout / "manifest.json"
-    if not manifest_path.exists():
-        fail("manifest missing: %s" % manifest_path)
+    if not args.heldout.is_dir():
+        fail("held-out set is not a directory: %s" % args.heldout)
         return 1
-    manifest = json.loads(manifest_path.read_text())
+    try:
+        # rejects duplicate ids / files (a repeated id would hide a task from
+        # every check), unsafe file names and tasks without a family
+        manifest = load_manifest(args.heldout / "manifest.json")
+    except ValueError as e:
+        fail(str(e))
+        return 1
     files = sorted(args.heldout.glob("heldout-*.md"))
     manifest_files = sorted(t["file"] for t in manifest["tasks"])
     if [f.name for f in files] != manifest_files:
@@ -63,14 +72,25 @@ def main(argv=None, prog=None):
     texts = {}
     for task in manifest["tasks"]:
         path = args.heldout / task["file"]
-        if not path.exists():
+        if not path.is_file():
             fail("file missing: %s" % task["file"])
             continue
-        text = path.read_text()
-        digest = hashlib.sha256(text.encode()).hexdigest()
-        if digest != task["sha256"]:
+        try:
+            data = path.read_bytes()
+        except OSError as e:
+            fail("cannot read %s: %s" % (task["file"], e))
+            continue
+        # the hash covers the raw bytes: reading text would translate
+        # newlines (CRLF passes as LF) and depend on the locale encoding
+        expected = task.get("sha256")
+        if not isinstance(expected, str):
+            fail("no sha256 in the manifest for %s" % task["file"])
+        elif hashlib.sha256(data).hexdigest() != expected:
             fail("hash differs in %s" % task["file"])
-        texts[task["id"]] = text
+        try:
+            texts[task["id"]] = data.decode("utf-8")
+        except UnicodeDecodeError:
+            fail("%s is not UTF-8" % task["file"])
     print("manifest and hashes: %s (%d tasks)"
           % ("ok" if not failures else "with failures", len(texts)))
 
@@ -120,7 +140,12 @@ def main(argv=None, prog=None):
     if not catalog_files:
         fail("catalog empty or missing: %s" % args.catalog)
         return 1
-    catalog_shingles = [shingles(normalize(p.read_text())) for p in catalog_files]
+    try:
+        catalog_shingles = [shingles(normalize(read_text(p, "catalog file")))
+                            for p in catalog_files]
+    except ValueError as e:
+        fail(str(e))
+        return 1
     worst_suite = 0.0
     worst_task = ids[0] if ids else None
     for task_id in ids:
