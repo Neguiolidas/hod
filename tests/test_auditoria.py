@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Tests of regression of the audit of the v0.1.0.
+"""Regression tests for the audit of v0.1.0.
 
-Each test reproduz the bug encontrado in the audit and afirma the
-behavior correct: failure in the v0.1.0 original and passes with hod_fixes.patch.
+Each test reproduces a bug found in that audit and asserts the correct
+behavior: it fails on the original v0.1.0 and passes with the fixes.
 """
 
 import json
@@ -62,8 +62,8 @@ def _setup_instruction(text):
 # --- generation -------------------------------------------------------------
 
 def test_generate_default_n8_has_no_duplicate_tasks():
-    """B2: with --n 8 (default of the README) the v0.1.0 repeats task in ~55% of the
-    seeds, and the set fails in the own audit."""
+    """B2: with --n 8 (the README default) v0.1.0 repeated a task in ~55% of
+    the seeds, and the set failed its own audit."""
     with tempfile.TemporaryDirectory() as tmp:
         cat = _catalog(tmp)
         shingles = _cat_shingles(cat)
@@ -88,8 +88,8 @@ def test_generate_fails_closed_when_n_exceeds_distinct_tasks():
 
 
 def test_similarity_gate_catches_contained_copy():
-    """B3: task held-out copied integer inside the file long of the
-    catalog. Jaccard dilui (|The|/|B|) and the copy passes in the ceiling of 0.30."""
+    """B3: a held-out task copied whole inside a long catalog file. Jaccard
+    dilutes it (|A|/|B|) and the copy passed under the 0.30 ceiling."""
     task = FAMILIES["destructive-order"](VARIANTS["destructive-order"][0])
     text = gen.render("heldout-destructive-order-00", task)
     filler = " ".join("termo%d" % i for i in range(400))
@@ -114,7 +114,7 @@ def test_normalize_is_unicode_stable():
 
 
 def test_short_texts_are_not_invisible():
-    """B16: text with less of 5 words becomes set empty and
+    """B16: a text with fewer than 5 words became an empty set and
     similarity 0 (fail-open)."""
     a = gen.shingles(gen.normalize("apaga os arquivos velhos"))
     assert a, "short text ended up without shingles"
@@ -122,8 +122,8 @@ def test_short_texts_are_not_invisible():
 
 
 def test_family_weights_reject_unknown_keys():
-    """B1: keys that not are families (ex.: categories of the ledger) were
-    ignoradas in silence."""
+    """B1: keys that are not families (e.g. ledger categories) were silently
+    ignored."""
     with tempfile.TemporaryDirectory() as tmp:
         cat = _catalog(tmp)
         wfile = Path(tmp) / "w.json"
@@ -137,8 +137,8 @@ def test_family_weights_reject_unknown_keys():
 # --- ledger and loop of feedback ------------------------------------------
 
 def test_ledger_weights_are_keyed_by_family():
-    """B1: the weights leave by category (vindos of by_category), but the
-    generator reads per family: the loop of feedback not does nothing."""
+    """B1: the weights came out per category (from by_category), but the
+    generator reads them per family: the feedback loop did nothing."""
     entry = {"placebo": False, "verdict": "OVERFIT",
              "by_category": {"memory": "OVERFIT", "instruction": "OVERFIT"},
              "by_family": {"memory-conflict": "OVERFIT",
@@ -150,8 +150,8 @@ def test_ledger_weights_are_keyed_by_family():
 
 
 def test_ledger_survives_corrupted_line():
-    """B14: the line truncada (crash in the meio of the append) derruba
-    `hod ledger` and `hod placebo` integers."""
+    """B14: a truncated line (crash in the middle of an append) took down
+    `hod ledger` and `hod placebo` entirely."""
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "ledger.jsonl"
         ledger_mod.append(path, {"placebo": True, "gap": 0.25})
@@ -165,8 +165,8 @@ def test_ledger_survives_corrupted_line():
 # --- gap and verdict ------------------------------------------------------
 
 def test_verdict_boundary_is_not_float_dependent():
-    """B9: held captured exactly 3/4 of the gain; in float the reason becomes
-    0.7499999999999999 and the verdict drops for Partial."""
+    """B9: held captured exactly 3/4 of the gain; in float the ratio becomes
+    0.7499999999999999 and the verdict dropped to PARTIAL."""
     suite_base = {"s0": 1, "s1": 0, "s2": 0}
     suite_cand = {"s0": 1, "s1": 1, "s2": 1}
     held_base = {"h%d" % i: 0 for i in range(8)}
@@ -179,8 +179,8 @@ def test_verdict_boundary_is_not_float_dependent():
 
 
 def test_heldout_regression_is_reported_when_suite_flat():
-    """B5: suite in the ceiling (not can rise) and held-out despenca: the v0.1.0
-    diz Without Improvement and esconde the regression."""
+    """B5: suite at the ceiling (cannot rise) and held-out collapses: v0.1.0
+    said NO IMPROVEMENT and hid the regression."""
     suite = {"s%d" % i: 2 for i in range(4)}
     held_base = {"h%d" % i: 2 for i in range(8)}
     held_cand = {"h%d" % i: 0 for i in range(8)}
@@ -189,8 +189,8 @@ def test_heldout_regression_is_reported_when_suite_flat():
 
 
 def test_deltas_are_paired():
-    """B8: task missing in the candidate changes the mean and the delta compares
-    populations different. h0 rose 1 point; the delta must be +1."""
+    """B8: a task missing from the candidate changed the mean, so the delta
+    compared different populations. h0 rose 1 point; the delta must be +1."""
     r = gap_mod.analyze({"s0": 0}, {"s0": 2},
                         {"h0": 0, "h1": 2}, {"h0": 1})
     assert r["held_delta"] == 1.0, r["held_delta"]
@@ -210,8 +210,8 @@ def test_significance_without_placebos_is_not_claimed():
 
 
 def test_overfit_gap_inside_placebo_noise_is_flagged():
-    """B6: the v0.1.0 compares |suite_delta| with the larger |gap| placebo; the gap
-    in si never is tested against the noise."""
+    """B6: v0.1.0 compared |suite_delta| with the largest placebo |gap|; the
+    gap itself was never tested against the noise."""
     calibration = {"n_placebo": 5, "max_abs_gap": 0.5,
                    "max_abs_suite_delta": 0.1,
                    "gaps": [0.5, -0.5, 0.25, -0.25, 0.0]}
@@ -235,7 +235,7 @@ def test_load_rejects_bool_and_float_scores():
 
 
 def test_unblinded_scores_feed_gap():
-    """B13: the output of `hod unblind` (format of the canary) was recusada by the
+    """B13: the output of `hod unblind` (canary format) was refused by
     `hod gap`, `hod calibrate` and `hod pipeline`."""
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "held.json"
@@ -247,15 +247,15 @@ def test_unblinded_scores_feed_gap():
 # --- prereg ---------------------------------------------------------------
 
 def test_prereg_held_up_with_suite_flat_can_match():
-    """B11: hypothesis "suite stopped, held-out rises" never dava match."""
+    """B11: the hypothesis "suite flat, held-out rises" could never match."""
     pre = prereg_mod.create("generaliza", "flat", "up", 0.75)
     res = prereg_mod.check(pre, {"suite_delta": 0.0, "held_delta": 0.5})
     assert res["match"], res
 
 
 def test_prereg_regeneration_does_not_bypass_peeking():
-    """B10: after see the result, regenerar the same seed recria the
-    same files with mtime new and the prereg late passes."""
+    """B10: after seeing the result, regenerating the same seed recreates
+    the same files with a new mtime and a late prereg passed."""
     with tempfile.TemporaryDirectory() as tmp:
         cat = _catalog(tmp)
         held = Path(tmp) / "held"
@@ -277,8 +277,9 @@ def test_prereg_regeneration_does_not_bypass_peeking():
 # --- calibration -----------------------------------------------------------
 
 def test_calibration_selection_bias_is_refused():
-    """B7: filter saturated with the Same baseline that enters in the delta generates
-    regression to the mean: with scores puro noise, the held-out "improvement" +0.5."""
+    """B7: filtering saturated tasks with the same baseline that enters the
+    delta creates regression to the mean: on pure-noise scores, the held-out
+    "improved" by +0.5."""
     import random
     rng = random.Random(0)
     ids = ["h%02d" % i for i in range(400)]
@@ -312,8 +313,8 @@ def test_calibration_selection_bias_is_refused():
 # --- blind ----------------------------------------------------------------
 
 def test_blind_template_order_does_not_leak_key():
-    """B12: the order of the keys in the answer key is the order alphabetical of the ids
-    real: the position i of the answer key revela the task real i."""
+    """B12: the answer-key order was the alphabetical order of the real ids:
+    position i of the answer sheet revealed real task i."""
     with tempfile.TemporaryDirectory() as tmp:
         held = Path(tmp) / "held"
         held.mkdir()
@@ -356,7 +357,7 @@ def test_unblind_refuses_incomplete_scores():
 # --- audit --------------------------------------------------------------
 
 def test_audit_still_fails_under_python_O():
-    """B4: the audit uses assert; with `python -O` everything passes."""
+    """B4: the audit used assert; under `python -O` everything passed."""
     with tempfile.TemporaryDirectory() as tmp:
         cat = _catalog(tmp)
         held = Path(tmp) / "held"
@@ -435,7 +436,7 @@ def test_pipeline_strong_prereg_and_by_family_in_ledger():
         entry = ledger_mod.load(ledger)[0]
         assert set(entry["by_family"]) <= set(FAMILIES)
         assert entry["by_family"]
-        # prereg editado after the generation: recusado same with mtime old
+        # prereg edited after the generation: refused even with an old mtime
         pre.write_text(pre.read_text().replace('"x"', '"y"'))
         os.utime(pre, (1, 1))
         rc = _quiet(cli.main, [

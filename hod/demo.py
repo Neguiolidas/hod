@@ -11,7 +11,12 @@ Usage:
     hod demo --out runs/demo [--seed 7] [--sweep 30] [--via-commands]
 
 --via-commands runs the same loop through the commands (`python -m hod.toy eval`
-and `propose`), exactly as a harness of yours would be plugged in.
+and `propose`), exactly as a harness of yours would be plugged in (also for
+the --sweep runs).
+
+The main run keeps its held-out sets and evaluator work directories
+(`improve --keep-work`): they are written under --out only when the run
+ends, so you can inspect the rotation afterwards. Sweep runs keep nothing.
 """
 
 
@@ -36,7 +41,7 @@ KIND_LABEL = {
 
 
 def run_one(out, seed=7, rounds=6, k=5, n_held=96, per_family=8,
-            via_commands=False, quiet=False):
+            via_commands=False, quiet=False, keep_work=True):
     out = Path(out)
     families = toy.write_catalog(out / "catalog", per_family=per_family)
     log = (lambda *a: None) if quiet else print
@@ -46,17 +51,22 @@ def run_one(out, seed=7, rounds=6, k=5, n_held=96, per_family=8,
         py = shlex.quote(sys.executable)
         evaluator = improve_mod.CommandEvaluator(
             py + " -m hod.toy eval --config {config} --tasks {tasks} "
-            "--seed {seed} --out {out}", out / "work")
+            "--seed {seed} --out {out}", out / "work", keep=keep_work)
         proposer = improve_mod.CommandProposer(
             py + " -m hod.toy propose --champion {champion} --history "
             "{history} --k {k} --round {round} --out {out}", out / "work")
-        initial = json.loads((init / "inicial.json").read_text())
+        initial = json.loads((init / "initial.json").read_text(encoding="utf-8"))
     else:
         evaluator, proposer, initial = toy.evaluate, toy.propose, toy.initial_config()
-    return improve_mod.improve(
-        initial, evaluator, proposer, out / "catalog", out / "improve",
-        suite_families=families, rounds=rounds, k=k, n_held=n_held, seed=seed,
-        sanity_good=toy.known_good(), sanity_bad=toy.known_bad(), log=log)
+    try:
+        return improve_mod.improve(
+            initial, evaluator, proposer, out / "catalog", out / "improve",
+            suite_families=families, rounds=rounds, k=k, n_held=n_held,
+            seed=seed, sanity_good=toy.known_good(),
+            sanity_bad=toy.known_bad(), keep_work=keep_work, log=log)
+    finally:
+        if hasattr(evaluator, "close"):
+            evaluator.close()
 
 
 def tally(result):
@@ -91,15 +101,18 @@ def main(argv=None, prog=None):
     parser.add_argument("--n-held", type=int, default=96)
     parser.add_argument("--sweep", type=int, default=0,
                         help="repeats with N seeds and counts acceptances by type")
-    parser.add_argument("--via-commands", action="store_true")
+    parser.add_argument("--via-commands", action="store_true",
+                        help="plug the toy in through commands, as `hod "
+                        "improve --eval/--propose` would (main and sweep runs)")
     args = parser.parse_args(argv)
     if args.out.exists() and any(args.out.iterdir()):
         print("demo: %s already exists and is not empty" % args.out, file=sys.stderr)
         return 1
-    run_one(args.out / "principal", seed=args.seed,
-                     rounds=args.rounds, n_held=args.n_held,
-                     via_commands=args.via_commands)
-    report = (args.out / "principal" / "improve" / "report.md").read_text()
+    run_one(args.out / "main", seed=args.seed,
+            rounds=args.rounds, n_held=args.n_held,
+            via_commands=args.via_commands)
+    report = (args.out / "main" / "improve" / "report.md").read_text(
+        encoding="utf-8")
     parts = ["# hod improve demo (toy harness, offline)", "",
              "Initial harness: skill 0.3 in all families. Each "
              "round the proposer brings 5 changes: genuine, overfit, placebo, "
@@ -109,7 +122,8 @@ def main(argv=None, prog=None):
         counts, finals, reasons = Counter(), Counter(), Counter()
         for s in range(1, args.sweep + 1):
             r = run_one(args.out / "sweep" / ("seed-%02d" % s), seed=s,
-                        rounds=args.rounds, n_held=args.n_held, quiet=True)
+                        rounds=args.rounds, n_held=args.n_held, quiet=True,
+                        via_commands=args.via_commands, keep_work=False)
             counts.update(tally(r))
             finals[r["final"]["verdict"] if r["final"] else None] += 1
             reasons[r["summary"]["reason"].split(":")[0]] += 1
@@ -120,7 +134,7 @@ def main(argv=None, prog=None):
         sweep = render_sweep(args.sweep, counts, finals, reasons)
         parts += ["", sweep]
         print(sweep)
-    (args.out / "DEMO.md").write_text("\n".join(parts))
+    (args.out / "DEMO.md").write_text("\n".join(parts), encoding="utf-8")
     print("demo written to %s" % (args.out / "DEMO.md"))
     return 0
 

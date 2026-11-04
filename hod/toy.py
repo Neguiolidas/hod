@@ -78,16 +78,17 @@ def write_catalog(out_dir, per_family=4):
                 % (task_id, k, fam, word, 10 + 7 * k, word.upper(),
                    "AB"[j % 2], 100 + k, word[:3])
             )
-            (out_dir / ("%s.md" % task_id)).write_text(text)
+            (out_dir / ("%s.md" % task_id)).write_text(text, encoding="utf-8")
             families[task_id] = fam
             k += 1
-    (out_dir / "suite_families.json").write_text(json.dumps(families, indent=2))
+    (out_dir / "suite_families.json").write_text(json.dumps(families, indent=2),
+                                                 encoding="utf-8")
     return families
 
 
 def initial_config():
     return {"skills": {f: 0.3 for f in sorted(FAMILIES)}, "memorized": [],
-            "estilo": "neutro"}
+            "style": "neutral"}
 
 
 def known_good():
@@ -115,7 +116,7 @@ def propose(champion, history, k, round_index):
     skills = champion.get("skills", {})
     out = []
 
-    # 1. overfit: memorize the tasks of the suite in that the champion not tirou 2
+    # 1. overfit: memorize the suite tasks where the champion did not score 2
     c = _clone(champion)
     weak = sorted(t for t, s in suite_scores.items() if s < 2)
     c["memorized"] = sorted(set(c.get("memorized", [])) | set(weak))
@@ -123,7 +124,7 @@ def propose(champion, history, k, round_index):
     c["kind"] = "overfit"
     out.append(c)
 
-    # 2. genuine: rule geral new, +0,3 in all families
+    # 2. genuine: a new general rule, +0.3 in all families
     c = _clone(champion)
     c["skills"] = {f: min(1.0, round(skills.get(f, 0) + 0.3, 3)) for f in fams}
     c["change"] = "general verification rule (+0.3 in all families)"
@@ -132,12 +133,12 @@ def propose(champion, history, k, round_index):
 
     # 3. placebo: changes only the style
     c = _clone(champion)
-    c["estilo"] = "formal" if champion.get("estilo") != "formal" else "neutro"
+    c["style"] = "formal" if champion.get("style") != "formal" else "neutral"
     c["change"] = "change the prompt style (cosmetic)"
     c["kind"] = "placebo"
     out.append(c)
 
-    # 4. swaps with regression: the mean rises, but the family despenca
+    # 4. trade with regression: the mean rises, but one family collapses
     c = _clone(champion)
     victim = fams[round_index % len(fams)]
     c["skills"] = {f: (0.0 if f == victim
@@ -147,7 +148,7 @@ def propose(champion, history, k, round_index):
     c["kind"] = "trade"
     out.append(c)
 
-    # 5. mixed: memorizes the suite and improvement the little of verdade
+    # 5. mixed: memorizes the suite and improves a little for real
     c = _clone(champion)
     c["memorized"] = sorted(set(c.get("memorized", [])) | set(weak))
     c["skills"] = {f: min(1.0, round(skills.get(f, 0) + 0.08, 3)) for f in fams}
@@ -155,13 +156,13 @@ def propose(champion, history, k, round_index):
     c["kind"] = "mixed"
     out.append(c)
 
-    # order rotativa: the genuine not arrives always in the same position
+    # rotating order: the genuine change does not always come in the same slot
     shift = round_index % len(out)
     out = out[shift:] + out[:shift]
     return out[:k]
 
 
-# --- CLI (for use the toy via --eval / --propose of command) -------
+# --- CLI (to use the toy through --eval / --propose commands) -------
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="python -m hod.toy")
@@ -179,29 +180,35 @@ def main(argv=None):
     pr.add_argument("--out", type=Path, required=True)
     c = sub.add_parser("catalog", help="writes the toy suite")
     c.add_argument("--out", type=Path, required=True)
-    i = sub.add_parser("init", help="escreve harness inicial, bom e ruim")
+    i = sub.add_parser("init", help="writes the initial, known-good and "
+                       "known-bad harness configs (initial.json, good.json, "
+                       "bad.json)")
     i.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.cmd == "eval":
-        cfg = json.loads(args.config.read_text())
-        tasks = json.loads(args.tasks.read_text())
-        args.out.write_text(json.dumps(evaluate(cfg, tasks, args.seed)))
+        cfg = json.loads(args.config.read_text(encoding="utf-8"))
+        tasks = json.loads(args.tasks.read_text(encoding="utf-8"))
+        args.out.write_text(json.dumps(evaluate(cfg, tasks, args.seed)),
+                            encoding="utf-8")
     elif args.cmd == "propose":
-        champion = json.loads(args.champion.read_text())
+        champion = json.loads(args.champion.read_text(encoding="utf-8"))
         history = []
         if args.history.exists():
-            for line in args.history.read_text().splitlines():
+            for line in args.history.read_text(encoding="utf-8").splitlines():
                 if line.strip():
                     history.append(json.loads(line))
         args.out.write_text(json.dumps(
-            propose(champion, history, args.k, args.round), indent=2))
+            propose(champion, history, args.k, args.round), indent=2),
+            encoding="utf-8")
     elif args.cmd == "catalog":
         write_catalog(args.out)
     elif args.cmd == "init":
         args.out.mkdir(parents=True, exist_ok=True)
-        (args.out / "inicial.json").write_text(json.dumps(initial_config(), indent=2))
-        (args.out / "bom.json").write_text(json.dumps(known_good(), indent=2))
-        (args.out / "ruim.json").write_text(json.dumps(known_bad(), indent=2))
+        for name, cfg in (("initial.json", initial_config()),
+                          ("good.json", known_good()),
+                          ("bad.json", known_bad())):
+            (args.out / name).write_text(json.dumps(cfg, indent=2),
+                                         encoding="utf-8")
     return 0
 
 

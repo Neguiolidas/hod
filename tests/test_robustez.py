@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Tests of the camadas of robustness (fase 5): prereg, calibration, categories,
+"""Tests of the robustness layers: prereg, calibration, categories,
 multi-seed, placebo, ledger, blind and agreement. Everything synthetic.
 
-Usage: python3 tests/test_robustness.py (code 0 = everything passes).
+Usage: python3 tests/test_robustez.py (code 0 = everything passes).
 """
 
 import json

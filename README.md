@@ -165,11 +165,19 @@ Because multi-seed sets are now disjoint, the pipeline also pools all held-out t
 
 ### improve: self-improvement loop
 
-`hod improve` runs a proposer (your command) that suggests harness changes and accepts only the ones HOD calls GENUINE. Each round: it checks that the evaluator has not changed (hash), asks the proposer for k candidates (the proposer sees the champion, its public suite scores and aggregate history, never held-out tasks), generates a fresh held-out set that excludes every task used before, measures the champion and a placebo rerun of it (noise floor), optionally checks evaluator sanity, then runs each candidate through the gates in order: your `--validate` command, coverage, CI verdict = GENUINE, no family regression on the held-out or the suite. The champion is replaced (atomic write) only after all gates pass. A sealed final-exam set, generated before round 1 and excluded from every round, compares the final champion with the initial harness at the end. Everything goes to `lineage.jsonl`: each candidate, the gate that stopped it, its numbers and a lesson with its invalidation trigger.
+`hod improve` runs a proposer (your command) that suggests harness changes and accepts only the ones HOD calls GENUINE. Each round: it checks that the evaluator has not changed (hash), asks the proposer for k candidates (the proposer sees the champion, its public suite scores and aggregate history, never held-out tasks), generates a fresh held-out set that excludes every task used before, measures the champion and a placebo rerun of it (noise floor), optionally checks evaluator sanity, then runs each candidate through the gates in order: your `--validate` command, coverage, CI verdict = GENUINE, no family regression on the held-out or the suite. A candidate whose evaluation fails is rejected (gate `evaluation_error`) instead of aborting the run. The champion is replaced (atomic, fsynced write) only after all gates pass and the evaluator hash is re-checked. A sealed final-exam set, generated before round 1 and excluded from every round, compares the final champion with the initial harness at the end; it is skipped (and recorded as such) if the run ended in error or the evaluator changed. Everything goes to `lineage.jsonl`: each candidate, the gate that stopped it, its numbers and a lesson with its invalidation trigger.
+
+What keeps the held-out out of the proposer's reach:
+
+- seeds: without `--seed`, the master seed is drawn from `secrets` and every set's seed is derived from it with sha256; the master seed is written only to the final `stop` record, and the proposer's history view carries no seed, held-out size or family weights. An explicit `--seed` makes the run reproducible, but a proposer that knows it can predict every set, the final exam included;
+- disk: held-out sets are generated in a private temporary directory outside `--out`, loaded into memory and deleted at once (the final exam and the exclusion buffer live in memory), and each evaluator call gets its own private directory, deleted as soon as its scores are read. `--keep-work` keeps them for debugging, copied into `--out` only after the run ends; failed evaluator calls are kept the same way;
+- honest limit: a command proposer runs as your OS user and can read whatever that user can, including the private directory while an evaluation is running. Real isolation needs a sandbox, a container or a separate user for the proposer.
+
+Evaluator identity: the hash covers the `--eval` command, every token of it that is a file, every program it names that is found on `PATH`, the `--validate` command, and the files or directories given with `--evaluator-file` (repeatable). It does not see modules a script imports, data it reads or the interpreter's libraries unless you list them with `--evaluator-file`.
 
 With `--frontier-target 0.35`, each round's held-out set leans toward the families where the champion's public suite success is near the target (the sealed final exam stays uniform).
 
-Stop rules: `--rounds`, `--budget` (candidate evaluations), `--patience` (rounds without an acceptance), an empty proposal, held-out exhausted, failed sanity, changed evaluator.
+Stop rules: `--rounds`, `--budget` (candidate evaluations), `--patience` (rounds without an acceptance), an empty proposal, held-out exhausted (see the capacity note under generate: about 510 to 545 tasks per run, final exam included), failed sanity, changed evaluator.
 
 ```bash
 hod improve --initial harness.json \
@@ -179,11 +187,11 @@ hod improve --initial harness.json \
   --sanity-good good.json --sanity-bad bad.json --validate "my-check {config}"
 ```
 
-`{tasks}` is a JSON list of `{"id", "family", "text"}`; the evaluator writes `{task_id: 0|1|2}`; the proposer writes a JSON list of candidate configs (each may carry `"change"`, a description). Exit codes: 0 something accepted, 2 nothing accepted, 1 error.
+`{tasks}` is a JSON list of `{"id", "family", "text"}`; the evaluator writes `{task_id: 0|1|2}`; the proposer writes a JSON list of candidate configs (each may carry `"change"`, a description). Templates are checked before any work: an unknown placeholder or a missing required one (`{config}`, `{tasks}` and `{out}` for `--eval`, `{out}` for `--propose`, `{config}` for `--validate`) is an error; write a literal brace as `{{` or `}}`. Commands run through the shell with stdin closed, in their own session, so a timeout kills the command and everything it started. Missing scores are never counted as 0: below 90% coverage the candidate fails the coverage gate and the final exam is INCONCLUSIVE. Exit codes: 0 something accepted, 2 nothing accepted, 1 error (bad input or usage, evaluator changed, champion or placebo below 90% coverage, an infrastructure failure; the `stop` record and `report.md` are still written), 130 interrupted.
 
 ### demo: offline proof
 
-`hod demo --out runs/demo [--sweep 30] [--via-commands]` runs `improve` against a deterministic toy harness (`hod/toy.py`: per-family skill knobs that transfer, a "memorize the suite" knob that does not, a cosmetic knob) with a scripted proposer that offers a genuine, an overfit, a placebo, a trade-off (one family zeroed) and a mixed change every round. No network, no model.
+`hod demo --out runs/demo [--sweep 30] [--via-commands]` (the sweep honors `--via-commands` too) runs `improve` against a deterministic toy harness (`hod/toy.py`: per-family skill knobs that transfer, a "memorize the suite" knob that does not, a cosmetic knob) with a scripted proposer that offers a genuine, an overfit, a placebo, a trade-off (one family zeroed) and a mixed change every round. No network, no model.
 
 Hooks, not cron and not a daemon: automation is event-triggered. The canary run generates multi-seed sets, blind templates and the frozen prereg copy; the canary report computes per-seed and per-category gaps, calibrates against ledger placebos and appends to the ledger by itself. Nothing polls, nothing runs on a schedule.
 

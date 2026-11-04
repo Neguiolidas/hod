@@ -102,6 +102,51 @@ purpose (marked **behavior change**); every fix has a regression test in
   rotation of excluding sets near 510 to 545 in total (stratified sampling
   stops at the smallest family), not "about 1,500".
 
+### improve, demo, toy
+
+- **Held-out predictability (high):** generation seeds were `seed*1000+r`
+  and the proposer's history exposed `seed`, `n_held` and `family_weights`,
+  so a proposer could rebuild every set, the sealed final exam included.
+  Without `--seed` the master seed now comes from `secrets`; per-set seeds
+  are derived with sha256; the history view carries none of it and the
+  master seed is written only to the final `stop` record. `improve(seed=None)`
+  in Python is random too (it defaulted to 1).
+- **Held-out on disk (high):** `<out>/work/eval-*` kept held-out task text
+  and per-task scores next to the proposer's files, and `<out>/final/heldout`
+  existed before round 1. Sets and evaluator work dirs now live in a private
+  temp dir outside `--out`, deleted right after use; the final exam and the
+  exclusion buffer stay in memory. New `--keep-work` copies them into `--out`
+  after the run (failed evaluator calls are kept the same way). Same-user
+  isolation is documented as a limit.
+- The final exam no longer runs after an evaluator change; the evaluator
+  hash is re-checked before accepting a round winner and before the exam.
+  Evaluator change is now exit 1.
+- Evaluator hash also covers programs found on `PATH`, the `--validate`
+  command and new `--evaluator-file PATH` entries (files or directories).
+- One candidate whose evaluation fails is rejected (gate
+  `evaluation_error`) instead of aborting the run; infrastructure failures
+  still write the `stop` record and `report.md`. New lineage fields:
+  `status` in `stop`, `coverage`/`problems` in sanity, `coverage` or
+  `skipped` in the final exam, gates `evaluator_changed` and `round_aborted`.
+- Missing scores are no longer filled with 0: placebo, sanity and the final
+  exam go through the coverage gate.
+- A timeout kills the whole process group (children of `sh` used to survive);
+  commands run with stdin closed.
+- Templates are validated before any work (a typo or a literal brace gave a
+  traceback); `{{ }}` escapes braces. Input files and numeric arguments give
+  one-line errors; usage errors exit 1 (argparse's 2 collided with
+  "nothing accepted").
+- The champion write fsyncs the file and its directory.
+- demo: `--sweep` honors `--via-commands`; the main run's directory is
+  `main/` (was `principal/`). toy: `toy init` writes `initial.json`,
+  `good.json`, `bad.json` (were `inicial`/`bom`/`ruim`); user-facing strings
+  are English.
+- tests: `test_improve_rejects_overfit_and_placebo_accepts_genuine` now also
+  allows an accepted `mixed` candidate (suite memorization + 0.08 of real
+  skill). Near the ceiling its gain is real transfer; v0.1.1 already accepted
+  it with seeds 13, 18 and 20, and the new seed derivation hits that case at
+  seed 7. Overfit and placebo are still never accepted.
+
 ### Packaging and CI
 
 - `pyproject.toml`: SPDX `license = "Apache-2.0"` plus `license-files`
